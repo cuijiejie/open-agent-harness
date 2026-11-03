@@ -1,0 +1,70 @@
+
+# IntelliJ project files
+.idea
+*.iml
+out
+gen
+*.tsv
+*.csv
+*.model
+*.log
+*.ipynb
+.ipynb_checkpoints/
+*.zip
+logs/
+__pycache__/
+*.pyc
+*.out
+*.lock
+agModels-predictClass/
+# 忽略所有excel
+*.xlsx
+# common下的excel除外
+!common/*.xlsx
+!template/*.xlsx
+/tsv/ecl/report/
+/tsv/ead/
+
+.venv/
+node_modules/
+
+# 沙箱工具清单（运行时数据，按用户生成）
+.sandbox_manifests/
+# 沙箱产出文件（会话收尾时回传，运行时数据）
+artifacts/
+# 平台技能库是运行时数据（管理员/用户发布产生），不进仓库
+skills-platform/
+
+# 运行时产物（评测报告、日志轮转备份）
+docs/eval-report-*.md
+*.log.bak.*
+*.log.*.bak
+
+# drawio 自动备份
+*.bkp
+.$*.bkp
+
+# MCP 服务的独立虚拟环境（体积大，不入库）
+src/plugins/mcp/**/.venv/
+
+# pytest 缓存（跑测试时用 -p no:cacheprovider，避免在仓库根留临时目录）
+.pytest_cache/
+pytest-cache-files-*/
+
+# 本地辅助（askpass 等，不参与部署）
+.tools/
+
+# ---- 本地配置与密钥（仓库里只留 configs.example.cfg）----
+config/configs.cfg
+config/*/configs.cfg
+.env
+.env.*
+*.pem
+auth.json
+
+# ---- 运行时产物 ----
+logs/
+artifacts/
+frontend/dist/
+.pytest_cache/
+pytest-cache-files-*/

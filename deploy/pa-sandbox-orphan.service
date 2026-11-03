@@ -1,0 +1,11 @@
+[Unit]
+Description=open-agent-harness 维护：孤儿沙箱删除（用户已不存在，超 3 天）
+Documentation=file:/opt/open-agent-harness/src/infra/Maintenance.py
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/open-agent-harness
+Environment=FLASK_CONFIG=dev
+# ⚠️ 唯一会真删沙箱的任务：沙箱名对不上任何注册用户 + 超过 3 天宽限
+ExecStart=/opt/open-agent-harness/.venv/bin/python -m src.infra.Maintenance sandbox-orphan --orphan-days 3
+Nice=10

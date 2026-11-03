@@ -1,0 +1,11 @@
+[Unit]
+Description=每天 03:30(UTC) 删除孤儿沙箱（用户已不存在且超 3 天）
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=60
+Unit=pa-sandbox-orphan.service
+
+[Install]
+WantedBy=timers.target

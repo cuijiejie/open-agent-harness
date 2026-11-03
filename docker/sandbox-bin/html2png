@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# html2png —— HTML/网页 → PNG 截图（整页长图，可用于把报表/图表存成图片）
+#
+# 用法:
+#   html2png 输入.html [输出.png] [视口宽度px=1200]
+#
+# 默认输出到 /sandbox/out/ 下同名 .png
+set -euo pipefail
+
+IN="${1:?用法: html2png <输入.html|URL> [输出.png] [宽度px]}"
+OUT="${2:-}"
+WIDTH="${3:-1200}"
+if [ -z "$OUT" ]; then
+  base="$(basename "$IN")"
+  OUT="/sandbox/out/${base%.*}.png"
+fi
+mkdir -p "$(dirname "$OUT")"
+
+case "$IN" in
+  http://* | https://*) SRC="$IN" ;;
+  *) SRC="file://$(readlink -f "$IN")" ;;
+esac
+
+python3 - "$SRC" "$OUT" "$WIDTH" <<'PY'
+import os
+import sys
+
+from playwright.sync_api import sync_playwright
+
+# 沙箱里必须带这些参数（--no-zygote 是关键，否则 "Target crashed"）
+LAUNCH_ARGS = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote"]
+
+src, out, width = sys.argv[1], sys.argv[2], int(sys.argv[3])
+with sync_playwright() as p:
+    browser = p.chromium.launch(args=LAUNCH_ARGS)
+    page = browser.new_page(viewport={"width": width, "height": 900}, device_scale_factor=2)
+    page.goto(src, wait_until="networkidle", timeout=60_000)
+    page.screenshot(path=out, full_page=True)
+    browser.close()
+
+print(f"✅ 已生成 {out}（{os.path.getsize(out) / 1024:.1f} KB，宽 {width}px 整页）")
+PY

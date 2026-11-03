@@ -1,0 +1,10 @@
+[Unit]
+Description=open-agent-harness 维护：日志切分 + 过期清理
+Documentation=file:/opt/open-agent-harness/src/infra/Maintenance.py
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/open-agent-harness
+Environment=FLASK_CONFIG=dev
+ExecStart=/opt/open-agent-harness/.venv/bin/python -m src.infra.Maintenance logs
+Nice=10

@@ -1,0 +1,11 @@
+Open Agent Harness
+Copyright 2026 The Open Agent Harness Authors
+
+This product includes software developed at
+the Open Agent Harness project (https://github.com/<your-org>/open-agent-harness).
+
+Third-party components and their licenses:
+  - Flask (BSD-3-Clause)
+  - LangChain / LangGraph / deepagents (MIT)
+  - Vue 3 (MIT)
+See requirements.txt and frontend/package.json for the full dependency list.

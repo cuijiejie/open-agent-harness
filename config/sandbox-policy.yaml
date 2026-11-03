@@ -1,0 +1,375 @@
+# ==============================================================================
+# OpenShell 沙箱策略 —— 完整可配项说明版
+# ==============================================================================
+#
+# 作用：定义「每个用户的沙箱」能碰什么、不能碰什么。
+#
+# 生效方式：创建沙箱时应用
+#   openshell sandbox create --name agent-xxx --policy <本文件>
+# 本项目中由 SandboxManager 自动带上（配置项 openshell_policy）。
+#
+# ⚠️ 四条重要约束（踩过坑）：
+#   1. 文件系统策略在【沙箱创建时锁定】，不能热改 —— 改了要重建沙箱才生效。
+#      网络规则和中间件【可以热改】（openshell policy set）。
+#   2. 策略文件必须放在运行账号的 $HOME 内（snap 版 CLI 读不到 /tmp 等目录）。
+#   3. 必须允许写 /dev/null —— deepagents 内置文件工具（ls/glob 等）生成的命令
+#      末尾带 `2>/dev/null`，写不了它会整条命令失败（rc=1、零输出），
+#      模型会误判「文件不存在」。这是踩过大坑的地方。
+#   4. 未列出的路径/网络一律拒绝（deny-by-default）。
+#
+# 官方文档：
+#   schema   https://docs.nvidia.com/openshell/latest/how-it-works/policies/schema
+#   网络规则 https://docs.nvidia.com/openshell/latest/how-it-works/policies/network-rules
+#
+# ==============================================================================
+
+version: 1                      # 固定为 1（schema 版本）
+
+# ==============================================================================
+# 一、文件系统策略  filesystem_policy
+# ==============================================================================
+# 生效时机：沙箱【启动时】（创建后不可改）
+# 强制者：内核 Landlock LSM
+#
+# 规则要点：
+#   - 没列出的路径 = 完全不可访问（连列目录都不行）
+#   - read_write 不能包含 "/"（不能把整根开放）
+#   - 路径必须绝对路径、不能含 ".."、单条不超过 4096 字节、最多 256 条
+#   - include_workdir：把沙箱工作目录（/sandbox）自动加进 read_write
+#       · 省略整个 filesystem_policy 段时默认为 true
+#       · 写了 filesystem_policy 段时默认为 false —— 所以我们显式写 true
+#   - 配置了网络规则时，OpenShell 还会自动补上若干「基线路径」
+#     （/proc、/dev/urandom、/dev/null 等），保证沙箱能正常启动
+# ------------------------------------------------------------------------------
+filesystem_policy:
+  include_workdir: true         # 工作区 /sandbox 自动可读写
+
+  read_only:                    # 只读：系统目录（改不了，防止破坏沙箱环境）
+    - /usr
+    - /lib
+    - /etc
+    - /bin
+    - /sbin
+    - /var/log
+    - /dev/urandom              # 随机数设备（对齐官方默认策略）
+
+  read_write:                   # 可读写
+    - /tmp
+    - /dev/null                 # ← 关键！见文件头「重要约束 3」
+
+  # 其他可配路径（按需打开）：
+  #   - /sandbox                # 工作区（include_workdir: true 已包含，无需重复写）
+  #   - /workspace              # 自定义工作目录（需镜像里真的存在该目录）
+  #   - /home/ubuntu/.cache     # 让 pip/npm 等能写缓存
+  #   - /opt/data               # 业务数据目录（只读场景建议放 read_only）
+
+# ==============================================================================
+# 二、Landlock 强制行为  landlock
+# ==============================================================================
+# 生效时机：沙箱【启动时】
+#
+# 当内核无法应用上面的文件系统规则时（例如内核版本太老、缺 Landlock ABI v3+），
+# 沙箱该怎么办：
+#   best_effort（默认）→ 不带文件系统限制继续启动，同时记录一条高严重性事件
+#                        （能用但隔离不完整，适合开发/测试）
+#   hard_requirement   → 直接启动失败（安全优先，适合生产）
+#
+# 我们目前用默认值（best_effort），下面注释掉即可；生产环境建议打开 hard_requirement。
+# ------------------------------------------------------------------------------
+# landlock:
+#   compatibility: hard_requirement     # best_effort | hard_requirement
+
+# ==============================================================================
+# 三、运行身份  process
+# ==============================================================================
+# 生效时机：沙箱【创建时】（Docker/Podman 用它决定 workload 身份）
+#
+#   run_as_user   沙箱内进程以哪个用户运行：`sandbox`（名前账户）或数字 UID
+#   run_as_group  同上，组
+#
+# 约束：数字 ID 必须在 1 ~ 4294967294 之间（OpenShell 拒绝 root=0）。
+# 省略则用镜像里声明的 USER（我们镜像里是 ubuntu，uid 1000）。
+#
+# 「最小权限」建议：如果沙箱内不需要写系统目录，保持非 root 即可（已是默认）。
+# ------------------------------------------------------------------------------
+# process:
+#   run_as_user: "1000"          # 或 "sandbox"
+#   run_as_group: "1000"
+
+# ==============================================================================
+# 四、网络规则  network_policies
+# ==============================================================================
+# 生效时机：沙箱【运行中也可改】（openshell policy set）
+# 强制者：沙箱网络代理（supervisor）
+#
+# 核心概念：
+#   每个规则 = 一组 endpoints（能连去哪儿） + 一组 binaries（谁能连）
+#   规则内是「笛卡尔积」：列出的每个 binary 都能连列出的每个 endpoint
+#   多条规则叠加（不是防火墙顺序表），但【deny 优先级高于任何 allow】
+#
+# 关键：这里不写任何规则 = 【默认拒绝所有出站】（最安全，我们当前就是这样）
+#
+# 字段速查：
+#   host          主机名/IP/通配符（通配符至少 3 个 DNS label，如 *.example.com）
+#   port          单个端口；或用 ports: [443, 8443]
+#   path          同一 host:port 下按路径 glob 选择端点（最具体者优先）
+#   allowed_ips   解析出的 IP 必须落在此范围内（CIDR）
+#   protocol      rest | websocket | graphql | mcp | json-rpc | tcp
+#                 （省略 = 检查连接但不检查请求内容）
+#   enforcement   enforce（拦截违规请求）| audit（放行+记日志，默认）
+#   access        read-only（GET/HEAD/OPTIONS）| read-write | full
+#   rules/deny_rules   自定义请求规则（比 access 预设更细）
+#   tls: skip     跳过 TLS 检查（客户端自己管 TLS、或服务端先说话时用）
+#
+# binaries 填的是【真正发起连接的可执行文件真实路径】，不一定是命令名：
+#   · pip 是脚本 → 实际连接的是 python 解释器，要写 /usr/bin/python3
+#   · ubuntu 上 /usr/bin/python3 是符号链接，真实路径用 readlink -f 查
+#   · 沙箱日志里会显示被拒连接的真实路径，可直接照抄
+# ------------------------------------------------------------------------------
+
+# ==============================================================================
+# 【已启用】用户可在沙箱内自行安装 Python 库
+# ==============================================================================
+# 放行 PyPI 两个域名（索引查询 + 包下载），只读（仅 GET/HEAD），违规请求直接拦截。
+#
+# binaries 必须写【解释器真实路径】：pip 是 Python 脚本，真正发起网络连接的
+# 是 /usr/bin/python3.12（/usr/bin/python3 只是它的符号链接）。
+#
+# 配套约定（见 AGENT.md）：装到工作区 /sandbox/.pylibs，随沙箱持久保留。
+# ==============================================================================
+network_policies:
+  pypi_readonly:
+    endpoints:
+      - host: pypi.org                     # 查包索引
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+      - host: files.pythonhosted.org       # 下载包文件（漏了它就只有"查得到、装不下"）
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+    binaries:
+      - path: /usr/bin/python3.12
+
+  # ---- 阶段 2：GitHub（下载静态二进制工具，如 jq / yq / ffmpeg 等）----
+  # 说明：github.com 下载 release 会 302 重定向，真正的文件在
+  #       release-assets.githubusercontent.com。
+  #       ⚠️ 二进制文件下载的域名【不能设 protocol: rest】—— 那会对 HTTP 请求做内容
+  #       检查，遇到二进制/带签名的下载链接会直接拒掉（实测报
+  #       curl: (52) Empty reply from server）。因此下面分两类：
+  #         · 网页 / API / raw 文本 → protocol: rest + access: read-only（可审计请求内容）
+  #         · 文件下载（tarball / release 资产）→ 只检查连接与域名，不做请求检查
+  #       注：不写 protocol 时 OpenShell 仍会终止 TLS，并拒绝「发往其他 host」的请求。
+  # 边界：只有列出的这三个程序能对这些地址发起连接。
+  github_download:
+    endpoints:
+      # —— 网页 / API / raw 文本：可做 L7 请求检查 ——
+      - host: github.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          # 只读：网页 / API / raw 文本
+          - allow: { method: GET,  path: "/**" }
+          - allow: { method: HEAD, path: "/**" }
+          # ⚠️ git clone/fetch 的协商阶段用的是 POST /<repo>.git/git-upload-pack
+          #    （语义上是"拉取"，HTTP 上是 POST）。此前只放行 GET，导致 clone 报
+          #    HTTP 403（日志：DENIED POST .../git-upload-pack）；这里只放行这一条具体
+          #    路径，push 用的 git-receive-pack 与其它 POST 一律保持拒绝。
+          - allow: { method: POST, path: "/**/git-upload-pack" }
+      - host: raw.githubusercontent.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+      # —— 文件下载：二进制内容，不做 L7 检查 ——
+      - host: codeload.github.com
+        port: 443
+      - host: objects.githubusercontent.com
+        port: 443
+      - host: release-assets.githubusercontent.com
+        port: 443
+    binaries:
+      - path: /usr/bin/curl
+      - path: /usr/bin/wget
+      - path: /usr/bin/python3.12
+      # git：镜像里已装 git（1.2 起），clone/fetch 走 GET（只读），加进来才能克隆仓库
+      - path: /usr/bin/git
+      - path: /usr/lib/git-core/git-remote-https
+
+  # ---- 阶段 3：国内镜像源（pip 加速 / npm registry）—— 已实测 ----
+  # 实测（在沙箱内、pandas 2.2.3 约 12MB 用 --no-deps 下载）：
+  #   · pypi.tuna.tsinghua.edu.cn   17.0s  ✅ 索引 + 包文件（/packages/**）都通
+  #   · mirrors.cloud.tencent.com   13.8s  ✅ 最快
+  #   · pypi.org（官方基线）        19.6s  ✅
+  #   · mirrors.aliyun.com          ⚠️ 策略确实放行了（日志 ALLOWED /policy:pypi_mirrors_cn），
+  #                                    但阿里服务器自己回 403，故当前不可用，保留备用
+  # 安全边界（实测有效）：
+  #   · 只读 —— 只放行 GET/HEAD；POST 实测被 OpenShell 拦下（403 policy_denied）
+  #   · 限定路径前缀（/simple、/packages、/pypi），不是整站放行
+  #   · 未列出的源仍被拒（对照：mirrors.ustc.edu.cn → DENIED，deny-by-default 未被破坏）
+  # 生效方式：新沙箱自动带上；已存在的沙箱用 `openshell policy set <沙箱名> --policy <本文件>`
+  #          热改（实测可行，返回 ✓ Policy version N submitted），无需重建
+  pypi_mirrors_cn:
+    endpoints:
+      - host: pypi.tuna.tsinghua.edu.cn          # 清华 PyPI 镜像（索引 + 包文件同域）
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        # rules 的正确写法：每条 = 一个 method + 一个 path（不是 methods[]/paths[]）
+        rules:
+          - allow: { method: GET,  path: "/simple/**" }
+          - allow: { method: HEAD, path: "/simple/**" }
+          - allow: { method: GET,  path: "/packages/**" }
+          - allow: { method: HEAD, path: "/packages/**" }
+      - host: mirrors.aliyun.com                 # 阿里云 PyPI 镜像（阿里侧当前返 403）
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET,  path: "/pypi/**" }
+          - allow: { method: HEAD, path: "/pypi/**" }
+      - host: mirrors.cloud.tencent.com          # 腾讯云 PyPI 镜像（实测最快）
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET,  path: "/pypi/**" }
+          - allow: { method: HEAD, path: "/pypi/**" }
+    binaries:
+      - path: /usr/bin/python3.12
+      - path: /usr/bin/curl
+
+  npm_registry:
+    endpoints:
+      - host: registry.npmjs.org                 # npm 官方 registry
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+      - host: registry.npmmirror.com             # 淘宝 npm 镜像
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+    binaries:
+      # 沙箱镜像里目前没有 node（要用得先扩镜像）；这里先留好位置，不生效也无害
+      - path: /usr/bin/node
+      - path: /usr/local/bin/node
+      - path: /usr/bin/npm
+      - path: /usr/local/bin/npm
+      - path: /usr/bin/curl
+
+  # ---- 附：apt 源（现在【不需要】，留作说明）----
+  # 沙箱内是非 root + /usr 只读，用户无法 apt install；放行 apt 源只会扩大出口
+  # 而没有实际用途。系统级依赖（字体、poppler、chromium 等）应"预装进镜像"，
+  # 见 docker/pa-sandbox.Dockerfile。
+
+  # ----------------------------------------------------------------------------
+  # 可选：允许沙箱访问一个内网 MySQL（默认关闭，按需启用）
+  #
+  # OpenShell 的出站策略有两条通道，踩过坑，记在这里省得再试：
+  #   ① protocol: tcp      —— 靠 DNS 劫持识别连接，目标**必须是域名**，
+  #                           写 IP 会被拒（must use a DNS hostname, not an IP literal）
+  #   ② 不写 protocol      —— 显式 forward proxy，可以用 allowed_ips 表示 IP 目标，
+  #                           但客户端必须自己发 HTTP CONNECT（pymysql 不会，
+  #                           需要在脚本里做本地隧道）
+  #
+  # 下面给的是通道②的最小写法；把 allowed_ips 换成你自己的库地址。
+  # 不需要就整段删掉或注释掉——默认策略就是拒绝所有出站。
+  # ----------------------------------------------------------------------------
+  # db_internal:
+  #   endpoints:
+  #     - port: 3306
+  #       allowed_ips: ["192.0.2.10/32"]      # 换成你的数据库地址
+  #   binaries:
+  #     - path: /usr/bin/python3.12            # 真正发起连接的解释器（readlink -f 查真实路径）
+
+# ---- 示例 B：按方法+路径放行内部 API（注意 rules 的正确写法）-----------------
+# network_policies:
+#   internal_api_readonly:
+#     endpoints:
+#       - host: api.example.internal
+#         port: 443
+#         protocol: rest
+#         enforcement: enforce
+#         rules:
+#           - allow: { method: GET,  path: "/api/**" }
+#           - allow: { method: HEAD, path: "/api/**" }
+#     binaries:
+#       - path: /usr/bin/curl
+
+# ---- 示例 C：允许连内部数据库（非 HTTP 协议用 tcp）-------------------------
+# network_policies:
+#   postgres_internal:
+#     endpoints:
+#       - host: db.internal.example
+#         port: 5432
+#         protocol: tcp             # tcp 端点不要再加 access/enforcement/rules
+#         # tls: skip               # 客户端自己完成 TLS 时打开
+#     binaries:
+#       - path: /usr/lib/postgresql/*/bin/psql     # 支持 glob
+
+# ---- 示例 D：先 audit 观察、再 enforce（推荐的调参流程）--------------------
+#   步骤 1：用 enforcement: audit 上线，跑一遍业务
+#   步骤 2：看日志里有哪些违规：openshell logs <沙箱名> --since 5m --source sandbox
+#   步骤 3：确认违规都是预期的 → 改成 enforcement: enforce
+#   注意：不要加 --level warn 过滤日志，否则看不到策略事件
+
+# ---- 注意（安全红线）--------------------------------------------------------
+#   · 禁止放行回环/链路本地/云元数据地址（169.254.169.254），OpenShell 会直接拒绝
+#   · 通配符 host 会放开该后缀所有域名的 DNS 查询，可能成为数据外泄通道 → 尽量用精确域名
+#   · allowed_ips 与禁用网段重叠时，整条规则会被判为阻断（不会静默生效）
+
+# ==============================================================================
+# 五、网络中间件  network_middlewares
+# ==============================================================================
+# 生效时机：沙箱【运行中也可改】
+#
+# 对「已经被网络规则放行」的流量做进一步处理：检查、改写、脱敏、阻断。
+# 典型用途：把请求里的敏感字段（身份证/手机号/密钥）替换掉再发出去。
+#
+# 字段：
+#   middleware   内置中间件名（如 openshell/regex）或网关注册的服务名
+#   endpoints.include  生效的主机模式（必填，最多 32 条）
+#   endpoints.exclude  跳过的主机（优先级高于 include）
+#   order        执行顺序，数字小的先跑，必须唯一，默认 0
+#   config       中间件自己的配置
+#   on_error     fail_closed（中间件故障时阻断流量，默认）| fail_open（放行）
+# ------------------------------------------------------------------------------
+# network_middlewares:
+#   regex-redactor:
+#     middleware: openshell/regex
+#     order: 10
+#     config:
+#       mode: redact                 # 脱敏模式
+#     on_error: fail_closed          # 故障时阻断（更安全）
+#     endpoints:
+#       include: ["*.example.com"]
+#       exclude: ["trusted.example.com"]
+
+# ==============================================================================
+# 六、其他相关能力（不在本文件内配置，但值得知道）
+# ==============================================================================
+# · 资源限制：在创建沙箱时用命令行参数，不是策略文件
+#     openshell sandbox create --cpu 1 --memory 1Gi --name agent-xxx
+#   （SandboxManager 目前未使用；如需限制每用户资源，可加到创建参数里）
+#
+# · 全局策略：网关管理员可对【所有】沙箱强制一份策略
+#     openshell policy set --global --policy <文件> --yes
+#   注意：全局策略会【替换】各沙箱自己的策略，并且屏蔽 provider 提供的规则；
+#         删除它才恢复正常。谨慎使用。
+#
+# · 策略来源优先级（从高到低）：
+#     1) 全局策略  2) 沙箱保存的策略（创建时 --policy）  3) 镜像内置策略  4) 官方默认策略
+#
+# · 查看与验证：
+#     openshell policy get <沙箱名> --base     # 看基础策略（本文件的内容）
+#     openshell policy get <沙箱名>            # 看【生效】策略（含 provider 贡献的规则）
+#     openshell policy list <沙箱名>           # 看策略变更历史（可回滚）
+#
+# · 形式化验证：OpenShell 自带 prover，可证明「策略授予的权限不超过某个边界」
+#     openshell policy prove ...（见官方 Policy Prover 文档）
+# ==============================================================================

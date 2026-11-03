@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# html2pdf —— HTML/网页 → PDF（无头 Chromium 渲染：支持 JS、现代 CSS、中文字体）
+#
+# 用法:
+#   html2pdf 输入.html [输出.pdf]
+#   html2pdf https://某地址 [输出.pdf]
+#
+# 说明:
+#   · 默认输出到 /sandbox/out/ 下同名 .pdf（产出文件放这里才能回传给用户）
+#   · 本地 HTML 里的外链 CDN 资源受沙箱网络策略限制，可能加载不到；
+#     要"完全离线可打印"的报表，建议 CSS/图表内联进 HTML
+#   · 只要静态 HTML/CSS 转换，weasyprint 更快：python3 -m weasyprint 输入.html 输出.pdf
+set -euo pipefail
+
+IN="${1:?用法: html2pdf <输入.html|URL> [输出.pdf]}"
+OUT="${2:-}"
+if [ -z "$OUT" ]; then
+  base="$(basename "$IN")"
+  OUT="/sandbox/out/${base%.*}.pdf"
+fi
+mkdir -p "$(dirname "$OUT")"
+
+case "$IN" in
+  http://* | https://*) SRC="$IN" ;;
+  *) SRC="file://$(readlink -f "$IN")" ;;
+esac
+
+# ⚠️ 沙箱里 Chromium 必须带这几个参数，否则 new_page 直接 "Target crashed"：
+#    --no-zygote 是关键（OpenShell 下 zygote 模型起不来），--disable-dev-shm-usage 防 /dev/shm 只有 64M 崩
+python3 - "$SRC" "$OUT" <<'PY'
+import os
+import sys
+
+from playwright.sync_api import sync_playwright
+
+LAUNCH_ARGS = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote"]
+
+src, out = sys.argv[1], sys.argv[2]
+with sync_playwright() as p:
+    browser = p.chromium.launch(args=LAUNCH_ARGS)
+    page = browser.new_page()
+    page.goto(src, wait_until="networkidle", timeout=60_000)
+    page.emulate_media(media="print")
+    page.pdf(
+        path=out,
+        format="A4",
+        print_background=True,
+        margin={"top": "12mm", "bottom": "12mm", "left": "10mm", "right": "10mm"},
+    )
+    browser.close()
+
+print(f"✅ 已生成 {out}（{os.path.getsize(out) / 1024:.1f} KB）")
+PY

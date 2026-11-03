@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ChatWidget 测试页</title>
+</head>
+<body>
+  <h1 style="padding: 20px; font-family: system-ui, -apple-system, sans-serif;">智能助手测试页面</h1>
+  <p style="padding: 0 20px; font-family: system-ui, -apple-system, sans-serif; color: #666;">右下角点击聊天按钮试试吧！</p>
+  
+  <script>
+  window.ChatWidgetConfig = {
+    apiBase: 'http://localhost:8000',
+    username: 'sunshangxiang',
+    displayName: '孙尚香'
+  }
+  </script>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

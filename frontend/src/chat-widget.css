@@ -1,0 +1,40 @@
+/* ===== 通用聊天窗口触发器 (ChatWidget) ===== */
+.cw-container {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 10000;
+}
+
+/* 触发按钮 */
+.cw-toggle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 24px rgba(59, 130, 246, 0.45);
+  transition: transform 0.2s, box-shadow 0.2s;
+  color: #fff;
+}
+.cw-toggle:hover {
+  transform: scale(1.1);
+  box-shadow: 0 8px 32px rgba(59, 130, 246, 0.6);
+}
+.cw-toggle svg {
+  width: 28px;
+  height: 28px;
+}
+.cw-toggle .cw-close-icon {
+  display: none;
+}
+.cw-container.open .cw-toggle .cw-chat-icon {
+  display: none;
+}
+.cw-container.open .cw-toggle .cw-close-icon {
+  display: block;
+}

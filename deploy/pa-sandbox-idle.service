@@ -1,0 +1,11 @@
+[Unit]
+Description=open-agent-harness 维护：闲置沙箱停止（只停不删，workspace 保留）
+Documentation=file:/opt/open-agent-harness/src/infra/Maintenance.py
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/open-agent-harness
+Environment=FLASK_CONFIG=dev
+# 7 天没用过就 stop；下次用户说话自动 start 恢复，文件不丢
+ExecStart=/opt/open-agent-harness/.venv/bin/python -m src.infra.Maintenance sandbox-idle --idle-days 7
+Nice=10

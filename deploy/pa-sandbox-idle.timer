@@ -1,0 +1,11 @@
+[Unit]
+Description=每天 03:20(UTC) 停止闲置超过 7 天的沙箱（只停不删）
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+Persistent=true
+RandomizedDelaySec=60
+Unit=pa-sandbox-idle.service
+
+[Install]
+WantedBy=timers.target

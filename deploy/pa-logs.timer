@@ -1,0 +1,11 @@
+[Unit]
+Description=每天 03:00(UTC) 切分并清理日志
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=60
+Unit=pa-logs.service
+
+[Install]
+WantedBy=timers.target

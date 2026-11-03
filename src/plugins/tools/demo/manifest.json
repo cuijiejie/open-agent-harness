@@ -1,0 +1,26 @@
+{
+  "name": "demo",
+  "display_name": "示例插件",
+  "version": "1.0.0",
+  "description": "演示如何用插件方式给平台加工具，不修改内核任何代码",
+  "tools": [
+    {
+      "name": "demo_say_hello",
+      "module": "demo",
+      "attr": "demo_say_hello",
+      "risk": "read",
+      "group": "示例",
+      "display_name": "打个招呼",
+      "note": "示例工具，可删除"
+    },
+    {
+      "name": "demo_server_time",
+      "module": "demo",
+      "attr": "demo_server_time",
+      "risk": "read",
+      "group": "示例",
+      "display_name": "服务器时间",
+      "note": "示例工具，可删除"
+    }
+  ]
+}

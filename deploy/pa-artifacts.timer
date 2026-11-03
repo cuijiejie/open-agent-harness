@@ -1,0 +1,11 @@
+[Unit]
+Description=每天 03:10(UTC) 清理 90 天没动过的交付物宿主副本
+
+[Timer]
+OnCalendar=*-*-* 03:10:00
+Persistent=true
+RandomizedDelaySec=60
+Unit=pa-artifacts.service
+
+[Install]
+WantedBy=timers.target

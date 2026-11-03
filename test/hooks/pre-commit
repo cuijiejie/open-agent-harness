@@ -1,0 +1,122 @@
+#!/bin/bash
+# Git 提交前检查（本地钩子，不需要 gitlab runner）
+#
+# 安装：bash test/install_hooks.sh
+# 跳过：git commit --no-verify
+#
+# 拦截什么：
+#   1. Python 语法错误          （写过坏的 \x00 字符串）
+#   2. 未定义的名字             （改了函数体忘 import，只在线上炸）
+#   3. 前端未声明变量/TDZ       （白屏 3 次）
+#   4. import 预检              （缺 import / blueprint 没注册）
+#   5. 敏感信息                 （部署脚本里有明文口令）
+#   6. 核心单测（装了 pytest 才跑）
+
+set -u
+cd "$(git rev-parse --show-toplevel)" || exit 1
+PY=${PY:-python}
+FAIL=0
+# 本机可能没装全依赖（langchain 等），没有就只跑"不需要依赖"的检查
+HAS_DEPS=0
+"$PY" -c "import langchain_core, flask" >/dev/null 2>&1 && HAS_DEPS=1
+
+say() { printf '%s\n' "$*"; }
+
+CHANGED_PY=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.py$' || true)
+
+# ── 1. Python 语法 ───────────────────────────────────────────
+say "[1/6] Python 语法检查"
+if [ -n "$CHANGED_PY" ]; then
+  if ! echo "$CHANGED_PY" | while read -r f; do
+        "$PY" -m py_compile "$f" 2>/dev/null || { say "  ✗ 语法错误: $f"; exit 1; }
+      done; then
+    FAIL=1
+  fi
+fi
+[ $FAIL -eq 0 ] && say "  ✓ 通过"
+
+# ── 2. 未定义的名字 ──────────────────────────────────────────
+# py_compile 只查语法：函数里用了模块级未导入的名字（如 time.time() 忘了 import time）
+# 照样能编译通过，跑起来才 NameError。用 symtable 静态查，全仓约 1s。
+say "[2/6] 未定义的名字（NameError 风险）"
+if [ -n "$CHANGED_PY" ] && [ -f test/tools/check_undefined_names.py ]; then
+  if ! echo "$CHANGED_PY" | xargs "$PY" test/tools/check_undefined_names.py >/tmp/pa_namecheck.$$ 2>&1; then
+    say "  ✗ 有函数引用了未定义/未 import 的名字："
+    grep -v '^PROBLEMS' /tmp/pa_namecheck.$$ | head -5
+    FAIL=1
+  fi
+  rm -f /tmp/pa_namecheck.$$
+elif [ -z "$CHANGED_PY" ]; then
+  say "  跳过（没改 Python）"
+fi
+[ $FAIL -eq 0 ] && say "  ✓ 通过"
+
+# ── 3. 前端静态检查 ──────────────────────────────────────────
+say "[3/6] 前端未声明变量 / TDZ / 纯函数单测"
+if git diff --cached --name-only | grep -q 'frontend/src/'; then
+  if [ -f test/check_refs.py ]; then
+    "$PY" test/check_refs.py >/dev/null 2>&1 || { say "  ✗ 前端检查未通过（会白屏），跑 python test/check_refs.py 看详情"; FAIL=1; }
+  fi
+  # 纯函数单测（零依赖，node 自带的 test runner；直接跑文件，避免 spawn）
+  if command -v node >/dev/null 2>&1 && [ -f test/js/utils.test.mjs ]; then
+    node test/js/utils.test.mjs >/tmp/pa_jscheck.$$ 2>&1 || {
+      say "  ✗ 前端纯函数单测失败（导航白名单/分页/LRU）："
+      grep -E '✖|AssertionError|Error' /tmp/pa_jscheck.$$ | head -4
+      FAIL=1
+    }
+    rm -f /tmp/pa_jscheck.$$
+  fi
+else
+  say "  跳过（没改前端）"
+fi
+[ $FAIL -eq 0 ] && say "  ✓ 通过"
+
+# ── 4. import 预检 ──────────────────────────────────────────
+say "[4/6] import 预检"
+if [ "$HAS_DEPS" -eq 0 ]; then
+  say "  跳过（本机未装依赖）"
+elif git diff --cached --name-only | grep -qE '^(src|config)/'; then
+  if ! "$PY" -c "import sys; sys.path.insert(0,'.'); import src.app" >/dev/null 2>&1; then
+    say "  ✗ import src.app 失败（缺依赖或循环引用），手动跑一下看报错"
+    FAIL=1
+  fi
+else
+  say "  跳过（没改后端）"
+fi
+[ $FAIL -eq 0 ] && say "  ✓ 通过"
+
+# ── 5. 敏感信息 ─────────────────────────────────────────────
+say "[5/6] 敏感信息扫描"
+SECRET_HIT=$(git diff --cached -U0 | grep -E '^\+' \
+  | grep -vE '^\+\+\+' \
+  | grep -iE 'password\s*=\s*["'"'"'][^"'"'"']{4,}|passwd\s*=\s*["'"'"'][^"'"'"']{4,}|://[^/@]+:[^/@]{4,}@|sk-[A-Za-z0-9]{16,}' \
+  || true)
+if [ -n "$SECRET_HIT" ]; then
+  say "  ✗ 疑似明文口令/密钥："
+  say "$SECRET_HIT" | head -5
+  FAIL=1
+else
+  say "  ✓ 通过"
+fi
+
+# ── 6. 单测 ─────────────────────────────────────────────────
+say "[6/6] 核心单测"
+if [ "$HAS_DEPS" -eq 0 ]; then
+  say "  跳过（本机未装依赖）"
+else
+  if ! "$PY" test/unit/test_core.py >/dev/null 2>&1; then
+    say "  ✗ 单测失败，跑 python test/unit/test_core.py 看详情"
+    FAIL=1
+  else
+    say "  ✓ 通过"
+  fi
+fi
+
+if [ $FAIL -ne 0 ]; then
+  say ""
+  say "提交被拒绝。修好后再提交，或临时用: git commit --no-verify"
+  exit 1
+fi
+say ""
+say "✅ 全部检查通过"
+exit 0

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# docx2pdf —— Word 文档 → PDF（pandoc 转 HTML + weasyprint 渲染，纯 Python 链路）
+#
+# 为什么不用 LibreOffice：沙箱（OpenShell）里 soffice 一律 abort（DeploymentException），
+# 已实测是沙箱进程模型限制，不是缺包；同机 docker 里正常。故用 pandoc + weasyprint 替代。
+#
+# 用法:
+#   docx2pdf 报告.docx [输出.pdf]
+#
+# 说明：适合文字/表格类文档；复杂排版（多栏、SmartArt、精确分页）会有出入。
+set -euo pipefail
+
+IN="${1:?用法: docx2pdf <文件.docx> [输出.pdf]}"
+OUT="${2:-/sandbox/out/$(basename "${IN%.*}").pdf}"
+mkdir -p "$(dirname "$OUT")"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# ① docx → HTML（图片抽到 media/，weasyprint 会按相对路径找到）
+pandoc "$IN" -f docx -t html5 --standalone --metadata title="document" \
+       --extract-media="$TMP/media" -o "$TMP/doc.html" 2>/dev/null
+
+# ② 注入中文字体与表格样式
+python3 - "$TMP/doc.html" <<'PY'
+import pathlib
+import sys
+
+p = pathlib.Path(sys.argv[1])
+html = p.read_text(encoding="utf-8")
+css = (
+    "<style>"
+    "body{font-family:'Noto Sans CJK SC','DejaVu Sans',sans-serif;font-size:12pt;line-height:1.65;margin:18mm}"
+    "h1,h2,h3{color:#1E3A5F}"
+    "table{border-collapse:collapse;width:100%;font-size:10.5pt}"
+    "td,th{border:1px solid #999;padding:4px 6px}"
+    "img{max-width:100%}"
+    "</style>"
+)
+html = html.replace("</head>", css + "</head>", 1) if "</head>" in html else css + html
+p.write_text(html, encoding="utf-8")
+PY
+
+# ③ HTML → PDF
+python3 -m weasyprint "$TMP/doc.html" "$OUT" 2>/dev/null
+echo "✅ 已生成 $OUT（$(stat -c%s "$OUT") 字节）"

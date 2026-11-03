@@ -1,0 +1,15 @@
+<svg viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg" aria-label="默认头像">
+  <defs>
+    <linearGradient id="abg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#EEF2FF"/>
+      <stop offset="100%" stop-color="#DDE4FF"/>
+    </linearGradient>
+    <linearGradient id="afg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6D74F5"/>
+      <stop offset="100%" stop-color="#4338CA"/>
+    </linearGradient>
+  </defs>
+  <circle cx="40" cy="40" r="40" fill="url(#abg)"/>
+  <circle cx="40" cy="30.5" r="13" fill="url(#afg)"/>
+  <path d="M13.5 74.5c2.7-13.6 13.6-21.6 26.5-21.6s23.8 8 26.5 21.6z" fill="url(#afg)" opacity="0.92"/>
+</svg>

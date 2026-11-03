@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# xlsx2pdf —— Excel 工作簿 → PDF（openpyxl 读数据 + weasyprint 渲染成表）
+#
+# 为什么不用 LibreOffice：见 docx2pdf 的说明（沙箱里 soffice 起不来）。
+#
+# 用法:
+#   xlsx2pdf 报表.xlsx [输出.pdf] [工作表名]
+#
+# 说明：每个工作表 → 一个 HTML 表；只做数据呈现（不还原 Excel 的图表/条件格式/合并单元格合并效果）。
+set -euo pipefail
+
+IN="${1:?用法: xlsx2pdf <文件.xlsx> [输出.pdf] [工作表名]}"
+OUT="${2:-/sandbox/out/$(basename "${IN%.*}").pdf}"
+SHEET="${3:-}"
+mkdir -p "$(dirname "$OUT")"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+python3 - "$IN" "$TMP/table.html" "$SHEET" <<'PY'
+import html as htmlmod
+import sys
+
+import openpyxl
+
+src, out, sheet_name = sys.argv[1], sys.argv[2], sys.argv[3]
+wb = openpyxl.load_workbook(src, data_only=True, read_only=True)
+sheets = [wb[sheet_name]] if sheet_name else list(wb.worksheets)
+
+parts = [
+    "<!doctype html><html><head><meta charset='utf-8'><style>",
+    "body{font-family:'Noto Sans CJK SC','DejaVu Sans',sans-serif;margin:14mm}",
+    "h1{font-size:16pt;color:#1E3A5F;margin:6px 0}",
+    "table{border-collapse:collapse;margin-bottom:14px;font-size:9.5pt}",
+    "td,th{border:1px solid #999;padding:3px 6px;white-space:nowrap}",
+    "tr:first-child td{background:#eef3f8;font-weight:bold}",
+    "</style></head><body>",
+]
+for ws in sheets:
+    parts.append(f"<h1>{htmlmod.escape(ws.title)}</h1><table>")
+    for row in ws.iter_rows(values_only=True):
+        cells = "".join(f"<td>{htmlmod.escape(str(c)) if c is not None else ''}</td>" for c in row)
+        parts.append(f"<tr>{cells}</tr>")
+    parts.append("</table>")
+parts.append("</body></html>")
+open(out, "w", encoding="utf-8").write("".join(parts))
+print(f"  已把 {len(sheets)} 个工作表转成 HTML 表")
+PY
+
+python3 -m weasyprint "$TMP/table.html" "$OUT" 2>/dev/null
+echo "✅ 已生成 $OUT（$(stat -c%s "$OUT") 字节）"
