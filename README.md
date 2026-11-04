@@ -20,6 +20,20 @@
 - **长短期记忆**：用户偏好与业务知识跨会话保留，可查询、可删除
 - **可观测**：轨迹（模型做了什么）+ 审计（人做了什么），两类记录分开存
 
+## 界面
+
+![对话：流式输出 + Markdown 表格渲染](docs/assets/screenshot-chat.jpg)
+
+| 技能与工具 | 用户管理 |
+|---|---|
+| ![技能与工具](docs/assets/screenshot-skills.jpg) | ![用户管理](docs/assets/screenshot-users.jpg) |
+
+| 角色与工具授权 | 登录页 |
+|---|---|
+| ![角色与工具授权](docs/assets/screenshot-roles.jpg) | ![登录页](docs/assets/screenshot-login.jpg) |
+
+> 截图来自真实运行实例（`openshell_enabled=false` 的最小可运行模式）。
+
 ## 快速开始
 
 ### 生产 / 单机部署（一条命令）

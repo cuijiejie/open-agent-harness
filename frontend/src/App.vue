@@ -4189,6 +4189,10 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
   padding: 6px 8px;
   text-align: left;
   color: #334155;
+  /* 表格里禁止逐字符断词：继承自 .msg-text 的 break-word 会把 Python 断成
+     "Pyth / on"，英文单词必须整体换行 */
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 .markdown-body th { background: #f1f5f9; color: #475569; font-weight: 600; white-space: nowrap; }
 .markdown-body tr:nth-child(even) td { background: #f8fafc; }
