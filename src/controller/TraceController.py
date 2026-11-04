@@ -15,7 +15,7 @@ TraceController = Blueprint("trace", __name__)
 
 
 def _me() -> str:
-    return str(session.get("CAS_USERNAME") or "").strip()
+    return str(session.get("USERNAME") or "").strip()
 
 
 @TraceController.route("/api/trace", methods=["GET"])

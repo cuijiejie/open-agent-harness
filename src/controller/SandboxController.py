@@ -1,7 +1,7 @@
 """沙箱文件管理 —— 网盘式浏览：目录导航 / 新建文件夹 / 下载 / 删除
 
 安全边界（四条）：
-  1. 用户名**只从 CAS 会话取**，不接受参数
+  1. 用户名**只从登录会话取**，不接受参数
   2. 路径必须落在 /sandbox 下，`..` 一律拒绝
   3. 系统目录 in/ out/ 不可删除（删了归拢规则会乱）
   4. 隐藏目录 .tmp/ skills* 不展示、不可操作
@@ -37,7 +37,7 @@ _MAX_ENTRIES: int = 500
 def _username() -> str:
     from flask import session
 
-    return str(session.get("CAS_USERNAME") or "").strip()
+    return str(session.get("USERNAME") or "").strip()
 
 
 def _safe_dir(raw: str) -> str:
@@ -144,7 +144,7 @@ def warm() -> tuple:
     """预热沙箱（前端打开页面时调一次，立即返回）
 
     为什么需要：登录成功时已经预热过（AuthUtil._init_sandbox），但那只覆盖
-    「今天第一次登录」。CAS 会话能维持很久，用户第二天直接打开页面**不会重走登录**，
+    「今天第一次登录」。登录会话能维持很久，用户第二天直接打开页面**不会重走登录**，
     沙箱可能已被维护任务 stop → 第一句话又要等 start + 技能读取。
 
     这里只做一件事：后台触发 ensure（幂等，已在跑就复用），接口立刻返回，

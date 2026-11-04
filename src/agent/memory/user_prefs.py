@@ -24,7 +24,7 @@ _CACHE_TTL: float = 15.0     # 注入提示缓存
 _DDL = """
 CREATE TABLE IF NOT EXISTS pa_user_prefs (
   id          BIGINT AUTO_INCREMENT PRIMARY KEY,
-  username    VARCHAR(64)  NOT NULL COMMENT '域账号（只从 CAS 会话取）',
+  username    VARCHAR(64)  NOT NULL COMMENT '账号（只从登录会话取）',
   content     VARCHAR(300) NOT NULL COMMENT '偏好正文，一条一个意思',
   source      VARCHAR(32)  NOT NULL DEFAULT 'user_said',
   created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -35,7 +35,7 @@ python AgentApp.py                                 # http://localhost:5001/open-
 
 开发环境可用免密登录：`/open-agent-harness/test-login`（生产务必关闭）。
 
-**完整部署步骤、可选组件（沙箱 / MCP / CAS）、运维与排障**见 [`docs/部署说明.md`](docs/部署说明.md)。
+**完整部署步骤、可选组件（沙箱 / MCP / 登录口令）、运维与排障**见 [`docs/部署说明.md`](docs/部署说明.md)。
 
 ## 目录结构
 

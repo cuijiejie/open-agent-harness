@@ -745,7 +745,7 @@ class SandboxManager:
     def artifact_path(self, username: str, session_id: str, filename: str) -> str | None:
         """取某个产出文件的宿主机路径（不存在返回 None）
 
-        安全：路径只由【CAS 会话里的用户名】+【前端会话 id】+【文件名基名】拼成，
+        安全：路径只由【登录会话里的用户名】+【前端会话 id】+【文件名基名】拼成，
         客户端指定不了目录 —— 天然跨不了用户、也穿越不出去。
         """
         name: str = os.path.basename((filename or "").replace("\\", "/"))

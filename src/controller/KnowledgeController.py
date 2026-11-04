@@ -17,7 +17,7 @@ KnowledgeController = Blueprint("knowledge", __name__)
 def _get_username() -> str:
     from flask import session
 
-    return str(session.get("CAS_USERNAME") or "").strip()
+    return str(session.get("USERNAME") or "").strip()
 
 
 def _is_admin(username: str) -> bool:

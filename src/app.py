@@ -23,7 +23,7 @@ from src.controller.SkillController import SkillController
 from src.controller.PlatformSkillController import PlatformSkillController
 from flask_cors import CORS
 from src.infra.db.database import close_db
-from src.infra.utils.AuthUtil import init_cas, get_current_user, get_current_display_name, login_required
+from src.infra.utils.AuthUtil import init_auth, get_current_user, get_current_display_name, login_required
 from config.Configs import cfg
 
 
@@ -79,8 +79,8 @@ def log_request(response):
     return response
 
 
-# ========== 初始化 CAS 单点登录 ==========
-init_cas(app)
+# ========== 初始化本地登录（账号 + 可选口令） ==========
+init_auth(app)
 
 app.register_blueprint(AuditController, url_prefix='/open-agent-harness')
 app.register_blueprint(TraceController, url_prefix='/open-agent-harness')
@@ -147,10 +147,13 @@ def serve_index():
 
 @main_bp.route('/logout')
 def logout():
-    """本地登出 + CAS 单点登出（对应 mars 的 /mars/logout）"""
+    """退出登录：清会话后回登录页"""
+    from src.infra.utils.AuthUtil import SESSION_USER
+
+    user = session.get(SESSION_USER, '')
     session.clear()
-    cas_logout_url = f"{cfg.casServer}/logout?service={cfg.casAfterLogin}"
-    return redirect(cas_logout_url)
+    log.info(f"退出登录: user={user}")
+    return redirect('/open-agent-harness/login')
 
 
 @main_bp.route('/api/user/currentUser')

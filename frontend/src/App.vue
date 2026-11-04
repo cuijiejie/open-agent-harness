@@ -3176,7 +3176,7 @@ const persistSessionId = (sid) => {
 onMounted(async () => {
   // 从后端获取 SSO 登录后的用户信息（中文名等）
   await fetchCurrentUser()
-  // 预热沙箱：登录接口已经预热过一次，但 CAS 会话活得久，第二天直接打开页面
+  // 预热沙箱：登录接口已经预热过一次，但登录会话活得久，第二天直接打开页面
   // 不会重走登录；这里补一刀，让容器在用户看界面时就起来（接口立即返回，不阻塞）
   fetch(`${apiBase}/api/warm`, { method: 'GET' }).catch(() => {})
   loadSessions()

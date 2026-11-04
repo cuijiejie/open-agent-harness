@@ -30,9 +30,9 @@ _RATE_LIMIT_MAX: int = 30     # 每窗口最大请求数
 
 
 def _get_username() -> str:
-    """从 CAS session 获取当前登录用户名。
+    """从登录 session 获取当前登录用户名。
 
-    安全约束：用户名只能来自后台 CAS session（get_current_user），
+    安全约束：用户名只能来自后台登录 session（get_current_user），
     绝不接受前端传入的 username，防止身份伪造越权。
     未登录时返回空字符串（路由上的 @login_required 已负责拦截）。
     """
@@ -184,10 +184,10 @@ def chat() -> tuple[Response, int]:
 
 @ChatController.route('/logout', methods=['GET', 'POST'])
 def do_logout() -> tuple[str, int]:
-    """退出登录：清掉本地会话后回首页（首页会自动跳 CAS 重新认证）"""
+    """退出登录：清掉本地会话后回登录页"""
     from flask import redirect, session as flask_session
     flask_session.clear()
-    return redirect('/open-agent-harness/')
+    return redirect('/open-agent-harness/login')
 
 
 @ChatController.route('/api/tools', methods=['GET'])
@@ -509,7 +509,7 @@ def get_artifact(session_id: str, filename: str):
     """打开/下载沙箱里回传的产出文件
 
     安全要点：
-    · 用户名只来自 CAS 会话；宿主机路径 = artifacts/<用户名>/<会话id>/<文件名>，
+    · 用户名只来自登录会话；宿主机路径 = artifacts/<用户名>/<会话id>/<文件名>，
       客户端指定不了目录 —— 天然跨不了用户
     · 再校验一次会话归属（纵深防御）
     · HTML/SVG 属于「模型生成内容」：加 CSP sandbox，脚本能跑但落在不透明源里，

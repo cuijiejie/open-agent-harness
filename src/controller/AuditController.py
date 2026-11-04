@@ -13,7 +13,7 @@ AuditController = Blueprint("audit", __name__)
 def _get_username() -> str:
     from flask import session
 
-    return str(session.get("CAS_USERNAME") or "").strip()
+    return str(session.get("USERNAME") or "").strip()
 
 
 @AuditController.route("/api/audit", methods=["GET"])

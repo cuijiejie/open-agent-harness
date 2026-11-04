@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     """聊天请求体
 
-    注意：不包含 username 字段——用户身份一律从后台 CAS session 获取，
+    注意：不包含 username 字段——用户身份一律从后台登录 session 获取，
     绝不接受前端传入的用户名（防止身份伪造越权）。
     """
     session_id: str = Field(default="", description="前端传入的会话标识")

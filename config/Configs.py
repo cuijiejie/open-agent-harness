@@ -170,14 +170,9 @@ class Configs(object):
         self.mcpServers: str = _get('mcp', 'servers', '')
         self.mcpTimeout: int = _get('mcp', 'timeout', '30', int)
 
-        # CAS 单点登录配置
-        self.casServer: str = _get('cas', 'cas_server')
-        self.casAfterLogin: str = _get('cas', 'cas_after_login', '/')
-        self.casValidateRoute: str = _get('cas', 'cas_validate_route', '/cas')
-        self.casServiceUrl: str = _get('cas', 'cas_service_url', '')
-
-        # USC 用户服务中心配置（查询中文名等）
-        self.uscRestUrl: str = _get('cas', 'usc_rest_url')
+        # 本地登录口令（为空=免密）
+        # 本地登录：口令为空 = 免密（内网演示 / 本机试用）
+        self.loginPassword: str = _get('app', 'login_password', '')
 
         # 应用配置
         self.secretKey: str = _get('app', 'secret_key')
