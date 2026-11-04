@@ -5,7 +5,6 @@
 """
 import os
 
-os.environ.setdefault("FLASK_CONFIG", "dev")
 os.environ.setdefault("PA_LLM_DEEPSEEK_API_KEY", "sk-placeholder-for-unit-tests")
 os.environ.setdefault("PA_LLM_DEEPSEEK_BASE_URL", "http://127.0.0.1:9/v1")
 os.environ.setdefault("PA_APP_SECRET_KEY", "unit-test-secret")

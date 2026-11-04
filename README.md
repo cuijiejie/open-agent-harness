@@ -27,7 +27,7 @@ git clone <你的仓库地址> && cd open-agent-harness
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-cp config/configs.example.cfg config/configs.cfg   # 填 db / llm / secret_key
+# 非敏感配置在 config/configs.cfg；口令与密钥用环境变量注入（见 docs/部署说明.md）
 
 cd frontend && npm ci && npm run build && cd ..
 python AgentApp.py                                 # http://localhost:5001/open-agent-harness/
@@ -48,7 +48,7 @@ src/
 ├── plugins/tools/    业务插件（自带 demo 示例，照着加自己的工具）
 └── app.py            Flask 应用装配
 frontend/             Vue 3 单页应用
-config/               Configs.py + configs.example.cfg（真实配置不入库）
+config/               Configs.py + configs.cfg（只放非敏感项，密钥走环境变量）
 deploy/               systemd 单元、验收脚本、维护定时器
 docs/                 部署说明
 ```

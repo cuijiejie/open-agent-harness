@@ -54,9 +54,10 @@ pytest-cache-files-*/
 # 本地辅助（askpass 等，不参与部署）
 .tools/
 
-# ---- 本地配置与密钥（仓库里只留 configs.example.cfg）----
-config/configs.cfg
-config/*/configs.cfg
+# ---- 本地覆盖配置（configs.cfg 入库但只放非敏感项；密钥一律走环境变量）----
+config/configs.local.cfg
+.env
+*.env
 .env
 .env.*
 *.pem

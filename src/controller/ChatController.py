@@ -640,9 +640,9 @@ def _build_dedup_key(session_id: str, username: str, message: str) -> str:
 
 
 def _safe_error(e: Exception) -> str:
-    """生产环境返回通用错误提示，避免泄露内部信息"""
+    """默认返回通用错误提示，避免泄露内部信息（[app] error_detail=true 时回显原始异常）"""
     from config.Configs import cfg
-    if cfg.env == 'pro':
+    if not cfg.errorDetail:
         return _PROD_ERROR_MSG
     return str(e)
 

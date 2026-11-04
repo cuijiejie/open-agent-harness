@@ -5,6 +5,5 @@ Documentation=file:/opt/open-agent-harness/src/infra/Maintenance.py
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/open-agent-harness
-Environment=FLASK_CONFIG=dev
 ExecStart=/opt/open-agent-harness/.venv/bin/python -m src.infra.Maintenance artifacts
 Nice=10

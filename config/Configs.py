@@ -34,46 +34,28 @@ class Configs(object):
                 return
 
             self.__config = configparser.RawConfigParser()
-            environment: str = os.getenv('FLASK_CONFIG') or 'dev'
-            log.info(f'启动环境：{environment} ##############################')
-            self.env = environment
-            self.__initConfigs(environment)
+            self.__initConfigs()
 
             Configs._initialized = True
 
-    def __initConfigs(self, environment: str) -> None:
+    def __initConfigs(self) -> None:
+        """加载配置：config/configs.cfg（可用 PA_CONFIG_FILE 指定别的路径）
+
+        一条原则：**文件只放非敏感项，口令与密钥只从环境变量来**。
+        """
         config_path: str = os.path.dirname(__file__)
+        config_file: str = (os.getenv('PA_CONFIG_FILE') or '').strip() or os.path.join(
+            config_path, 'configs.cfg')
 
-        # 配置来源优先级：PA_CONFIG_FILE 环境变量 > config/<环境>/configs.cfg > config/configs.cfg
-        # 开源版仓库里**不放任何真实配置**，只放 configs.example.cfg：
-        #   cp config/configs.example.cfg config/configs.cfg   # 然后按需填写
-        # 或直接用环境变量注入（PA_DB_MYSQL_PASS 等），适合容器化部署。
-        import os as _os
-
-        env_file: str = (_os.getenv('PA_CONFIG_FILE') or '').strip()
-        if env_file:
-            config_file = env_file
-        else:
-            candidates = [config_path, os.path.join(config_path, '..', 'config')]
-            config_file = ''
-            for base in candidates:
-                cand = os.path.join(base, environment, 'configs.cfg')
-                if _os.path.isfile(cand):
-                    config_file = cand
-                    break
-            if not config_file:
-                flat = _os.path.join(config_path, 'configs.cfg')
-                config_file = flat if _os.path.isfile(flat) else _os.path.join(config_path, 'dev', 'configs.cfg')
-
-        if not _os.path.isfile(config_file):
+        if not os.path.isfile(config_file):
             log.warning(
                 f'未找到配置文件 {config_file}，将只使用环境变量 / 默认值；'
-                f'请参考 config/configs.example.cfg 创建'
+                f'请复制 config/configs.cfg 并填好非敏感项'
             )
 
-        # 必须显式 utf-8：configs.cfg 里有中文注释，Windows 默认用 GBK 读会直接
-        # UnicodeDecodeError（Linux 上默认 UTF-8 才没暴露），本地跑测试/调试就挂在这
+        # 必须显式 utf-8：文件里有中文注释，Windows 默认 GBK 会 UnicodeDecodeError
         self.__config.read(config_file, encoding='utf-8')
+        log.info(f'配置文件：{config_file}')
 
         def _get(section: str, key: str, fallback: str = '',
                  type_fn: Callable[[str], Any] = str) -> Any:
@@ -185,6 +167,10 @@ class Configs(object):
         # 新账号首次登录时自动分配的默认角色（role_code）
         # 只对**新建档**的账号生效，已有账号不动（管理员手工收回的角色不会被补回）
         self.defaultRole: str = _get('app', 'default_role', 'default')
+        # 接口报错是否回显原始异常（false=只给通用提示，避免泄露内部细节）
+        self.errorDetail: bool = _get(
+            'app', 'error_detail', 'false',
+            lambda v: str(v).strip().lower() in ('1', 'true', 'yes', 'on'))
 
 
 cfg: Configs = Configs()
