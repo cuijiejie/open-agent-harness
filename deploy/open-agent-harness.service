@@ -1,6 +1,6 @@
 [Unit]
-Description=open-agent-harness (dev) - 产品中心智能助手 Flask/LangGraph 服务
-Documentation=file:///opt/open-agent-harness/deploy/README.md
+Description=Open Agent Harness - 智能体平台
+Documentation=file:///opt/open-agent-harness/docs/部署说明.md
 After=network-online.target
 Wants=network-online.target
 
@@ -8,31 +8,22 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/open-agent-harness
 
-# ⚠️ 刻意【不】用 -c gun_conf.py：gun_conf.py 里 daemon=True 会让 gunicorn 自我
-# 后台化，systemd 会认为主进程退出从而反复重启。下面把参数显式展开，
-# **必须与 gun_conf.py 保持一致**（改一处要同步另一处）。
-# timeout 必须 > 单轮上限 turn_max_seconds（dev 1200 / pro 600）：原来 240 会把
-# 长任务的 worker 直接杀掉（前端断流、收尾逻辑不执行）。
-# gthread：默认 sync worker 会忽略 threads（6 进程实际只有 6 并发），
-# 而本服务是 SSE 长连接 + 阻塞式沙箱 CLI，必须吃多线程。
+# 密钥与口令从这个文件读（不存在也不影响启动，前面的 - 表示可选）
+EnvironmentFile=-/opt/open-agent-harness/.env
+Environment=PYTHONUNBUFFERED=1
+
+# 并发参数都在 gun_conf.py 里（6 worker × 4 thread = 24 并发槽、gthread、timeout 1300），
+# 这里只覆盖监听地址。要改并发请改 gun_conf.py，别在单元文件里另写一套。
 ExecStart=/opt/open-agent-harness/.venv/bin/gunicorn \
-  --config /opt/open-agent-harness/gun_warm.py \
+  --config /opt/open-agent-harness/gun_conf.py \
   --bind 0.0.0.0:5001 \
-  --workers 6 \
-  --worker-class gthread \
-  --threads 4 \
-  --timeout 1300 \
-  --graceful-timeout 60 \
-  --log-level info \
-  --access-logfile /opt/open-agent-harness/open_agent_harness.log \
-  --error-logfile /opt/open-agent-harness/open_agent_harness.log \
-  --capture-output \
   AgentApp:app
 
 Restart=always
 RestartSec=5
 KillMode=mixed
 TimeoutStopSec=90
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target

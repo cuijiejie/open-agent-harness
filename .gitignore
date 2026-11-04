@@ -58,14 +58,9 @@ pytest-cache-files-*/
 config/configs.local.cfg
 .env
 *.env
-.env
 .env.*
 *.pem
 auth.json
 
 # ---- 运行时产物 ----
-logs/
-artifacts/
 frontend/dist/
-.pytest_cache/
-pytest-cache-files-*/

@@ -22,20 +22,38 @@
 
 ## 快速开始
 
+### 生产 / 单机部署（一条命令）
+
 ```bash
-git clone <你的仓库地址> && cd open-agent-harness
+# 1. 先建库（只需一次）
+mysql -uroot -p -e "CREATE DATABASE open_agent_harness DEFAULT CHARSET utf8mb4;
+  CREATE USER 'agent'@'%' IDENTIFIED BY '你的密码';
+  GRANT ALL PRIVILEGES ON open_agent_harness.* TO 'agent'@'%'; FLUSH PRIVILEGES;"
+
+# 2. 安装（建 venv、装依赖、构建前端、生成 .env、装 systemd、探活）
+sudo PA_DB_MYSQL_PASS='你的密码' PA_LLM_DEEPSEEK_API_KEY='sk-你的key' \
+     bash deploy/install.sh
+```
+
+装完打开 `http://<服务器IP>:5001/open-agent-harness/`。
+
+脚本幂等，重跑即升级；`APP_DIR` / `PORT` / `SERVICE` 可用环境变量覆盖。
+
+### 本地试跑
+
+```bash
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
-# 非敏感配置在 config/configs.cfg；口令与密钥用环境变量注入（见 docs/部署说明.md）
-
+export PA_DB_MYSQL_PASS=xxx PA_LLM_DEEPSEEK_API_KEY=sk-xxx
+export PA_APP_SECRET_KEY=$(python -c "import secrets;print(secrets.token_hex(32))")
 cd frontend && npm ci && npm run build && cd ..
 python AgentApp.py                                 # http://localhost:5001/open-agent-harness/
 ```
 
-开发环境可用免密登录：`/open-agent-harness/test-login`（生产务必关闭）。
+开发环境可用免密直登：`/open-agent-harness/test-login`（对外开放务必关闭）。
 
-**完整部署步骤、可选组件（沙箱 / MCP / 登录口令）、运维与排障**见 [`docs/部署说明.md`](docs/部署说明.md)。
+**逐步骤部署、可选组件（沙箱 / MCP / PG / Redis）、设管理员、Nginx、运维、排障**
+见 [`docs/部署说明.md`](docs/部署说明.md)。
 
 ## 目录结构
 
