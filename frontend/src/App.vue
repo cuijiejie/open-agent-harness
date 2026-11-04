@@ -15,27 +15,26 @@
           <!-- 品牌区：Open Agent Harness（自绘 SVG logo + 字标） -->
           <div class="brand">
             <svg class="brand-mark" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-label="Open Agent Harness">
-              <ellipse cx="24" cy="41" rx="13" ry="1.9" fill="#E1251B" opacity="0.12"/>
-              <!-- 车顶弧 -->
-              <path d="M10.6 21.4C10.6 14.7 16.6 9.4 24 9.4s13.4 5.3 13.4 12z" fill="#E1251B"/>
-              <!-- 挡风玻璃（浅蓝玻璃色，白底上也清晰） -->
-              <path d="M13.5 20.3C14.4 14.6 18.7 11.4 24 11.4s9.6 3.2 10.5 8.9z" fill="#CBD8EA"/>
-              <path d="M15.4 19.6C16.2 15.4 19.6 13.1 24 13.1s7.8 2.3 8.6 6.5z" fill="#E8EFF9"/>
-              <!-- 车身 -->
-              <rect x="7.8" y="20.3" width="32.4" height="14.4" rx="5" fill="#E1251B"/>
-              <!-- 大灯 -->
-              <rect x="10.4" y="23.2" width="7.8" height="3.8" rx="1.9" fill="#FFD166"/>
-              <rect x="29.8" y="23.2" width="7.8" height="3.8" rx="1.9" fill="#FFD166"/>
-              <!-- 后视镜 -->
-              <rect x="5" y="21.1" width="3.9" height="3.1" rx="1.5" fill="#E1251B"/>
-              <rect x="39.1" y="21.1" width="3.9" height="3.1" rx="1.5" fill="#E1251B"/>
-              <!-- 轮胎 -->
-              <rect x="8.4" y="32.4" width="7.6" height="6.6" rx="2.8" fill="#27303B"/>
-              <rect x="32" y="32.4" width="7.6" height="6.6" rx="2.8" fill="#27303B"/>
+              <defs>
+                <linearGradient id="oahBrand" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#4F46E5"/>
+                  <stop offset="1" stop-color="#6366F1"/>
+                </linearGradient>
+              </defs>
+              <rect x="2" y="2" width="44" height="44" rx="13" fill="url(#oahBrand)"/>
+              <g stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" opacity="0.65">
+                <line x1="15.8" y1="17.4" x2="21.2" y2="21.3"/>
+                <line x1="32.2" y1="17.4" x2="26.8" y2="21.3"/>
+                <line x1="24" y1="29.4" x2="24" y2="32.2"/>
+              </g>
+              <circle cx="24" cy="24" r="5.3" fill="#FFFFFF"/>
+              <circle cx="13.6" cy="15.2" r="3.7" fill="#FFFFFF" opacity="0.9"/>
+              <circle cx="34.4" cy="15.2" r="3.7" fill="#FFFFFF" opacity="0.9"/>
+              <circle cx="24" cy="35.6" r="3.7" fill="#FFFFFF" opacity="0.9"/>
             </svg>
             <div class="brand-text">
-              <div class="brand-name">Open Agent Harness<span class="brand-suffix">HARNESS</span></div>
-              <div class="brand-sub">OPENAGENT · 汽车金融</div>
+              <div class="brand-name">Open Agent Harness</div>
+              <div class="brand-sub">OPEN SOURCE · 智能体平台</div>
             </div>
           </div>
 
@@ -3639,20 +3638,20 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 
 /* ===== 侧边栏品牌区（Open Agent Harness） ===== */
 .brand {
-  display: flex; align-items: center; gap: 12px;
+  display: flex; align-items: center; gap: 10px;
   padding: 4px 6px 16px; margin-bottom: 12px;
   border-bottom: 1px solid rgba(148, 163, 184, .22);
 }
 .brand-mark {
-  width: 54px; height: 54px; flex: 0 0 auto; display: block;
+  width: 40px; height: 40px; flex: 0 0 auto; display: block;
   transition: transform .18s ease;
 }
 .brand:hover .brand-mark { transform: scale(1.04); }
-.brand-text { min-width: 0; }
+.brand-text { min-width: 0; flex: 1; }
 .brand-name {
-  display: flex; align-items: baseline;
-  font-size: 19px; font-weight: 800; letter-spacing: .06em;
-  color: #3F3F46; line-height: 1.15; white-space: nowrap;
+  display: block;
+  font-size: 16px; font-weight: 800; letter-spacing: .01em;
+  color: #3F3F46; line-height: 1.2; white-space: nowrap;
 }
 /* 参考 deepseek + [HARNESS] 徽标式：字标 + 描边胶囊后缀 */
 .brand-suffix {
