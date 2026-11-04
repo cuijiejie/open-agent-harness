@@ -18,8 +18,8 @@ const PW = process.env.PA_PLAYWRIGHT || 'playwright'
 const { chromium } = require(PW)
 
 const BASE = (process.env.PA_BASE || 'http://127.0.0.1:5001/open-agent-harness').replace(/\/$/, '')
-const USER = process.env.PA_USER || 't_e2e_a'
-const ADMIN = process.env.PA_ADMIN || 'yaoyue'
+const USER = process.env.PA_USER || 'demo'
+const ADMIN = process.env.PA_ADMIN || 'admin'
 const SKIP_LLM = ['1', 'true', 'yes'].includes(String(process.env.PA_SKIP_LLM || '').toLowerCase())
 const HEADLESS = process.env.PA_HEADFUL ? false : true
 

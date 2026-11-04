@@ -1,4 +1,4 @@
-# 产品中心智能助手 · OpenShell 沙箱工作负载镜像
+# Open Agent Harness · OpenShell 沙箱工作负载镜像
 #
 # 版本演进：
 #   1.0  只有 python3 + pandas/openpyxl（能跑脚本，但没字体、没转换工具）

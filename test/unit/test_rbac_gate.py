@@ -101,10 +101,10 @@ class TestResolveTools(_ClearRbacCache):
         from src.agent.tools.registry import resolve_tools
         from src.infra.RbacService import rbac
 
-        perm = rbac.permissions("yaoyue")
+        perm = rbac.permissions("alice")
         if "*" not in perm["tools"] and "sandbox_shell" not in perm["tools"]:
             self.skipTest("当前环境的 admin 角色没有 always_on 工具")
-        names = {getattr(t, "name", "") for t in resolve_tools("yaoyue")}
+        names = {getattr(t, "name", "") for t in resolve_tools("alice")}
         self.assertIn("sandbox_shell", names, f"管理员缺少 always_on 工具：{sorted(names)}")
 
 
@@ -129,10 +129,10 @@ class TestAllowsTool(_ClearRbacCache):
     def test_admin_wildcard(self):
         from src.infra.RbacService import rbac
 
-        perm = rbac.permissions("yaoyue")
+        perm = rbac.permissions("alice")
         if "*" not in perm["tools"]:
             self.skipTest("admin 不是通配符权限")
-        self.assertTrue(rbac.allows_tool("yaoyue", "sandbox_shell"))
+        self.assertTrue(rbac.allows_tool("alice", "sandbox_shell"))
 
 
 class TestNoFailOpenSwitch(_ClearRbacCache):

@@ -365,7 +365,7 @@ def list_users() -> tuple[Response, int]:
 @RbacController.route('/api/rbac/users', methods=['POST'])
 @login_required
 def assign_roles() -> tuple[Response, int]:
-    """覆盖式设置某用户的角色：{"username": "yaoyue", "roles": ["operator"]}"""
+    """覆盖式设置某用户的角色：{"username": "alice", "roles": ["operator"]}"""
     operator: str = _get_username()
     if not rbac.is_admin(operator):
         target_req: str = str((request.get_json(silent=True) or {}).get("username") or "")

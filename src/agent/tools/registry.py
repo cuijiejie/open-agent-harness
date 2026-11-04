@@ -17,7 +17,7 @@
 
 配置（configs.cfg 的 [agent] 段）
 --------------------------------
-    tool_admin_users=yaoyue,tangzilong   ; 管理员用户名（逗号分隔）
+    tool_admin_users=alice,bob   ; 管理员用户名（逗号分隔）
     tool_write_scope=all|admins|none|用户1,用户2   ; 写类工具给谁（默认 all，见下）
     tool_exec_scope=all|admins|none|用户1,用户2    ; 沙箱执行类给谁（默认 all）
 

@@ -37,23 +37,23 @@ class TestSandboxName(unittest.TestCase):
 
     def test_normal_account(self):
         # 纯字母数字账号：名字原样保留（不补哈希，保住已有沙箱）
-        self.assertEqual(self.sm.sandbox_name("yaoyue"), "agent-yaoyue")
-        # 带 `.` 的账号属于有损映射 → 必须带 6 位哈希（cui.jie → agent-cui-ji-xxxxxx）
-        n = self.sm.sandbox_name("cui.jie")
+        self.assertEqual(self.sm.sandbox_name("alice"), "agent-alice")
+        # 带 `.` 的账号属于有损映射 → 必须带 6 位哈希（alice.wang → agent-alice-xxxxxx）
+        n = self.sm.sandbox_name("alice.wang")
         self._assert_legal(n)
-        self.assertRegex(n, r"-agent-cui-ji-|^agent-cui-ji-[0-9a-f]{6}$")
+        self.assertRegex(n, r"^agent-alice-[0-9a-f]{6}$")
 
     def test_lowercase_only_account(self):
-        self.assertEqual(self.sm.sandbox_name("yaoyue"), "agent-yaoyue")
+        self.assertEqual(self.sm.sandbox_name("alice"), "agent-alice")
 
     def test_lossy_mapping_gets_hash(self):
-        n = self.sm.sandbox_name("cui.jie")
-        n2 = self.sm.sandbox_name("cui_jie")
+        n = self.sm.sandbox_name("alice.wang")
+        n2 = self.sm.sandbox_name("alice_wang")
         self._assert_legal(n2)
         self.assertNotEqual(n, n2, "两个不同账号不能撞进同一个沙箱")
 
     def test_cjk_account(self):
-        n = self.sm.sandbox_name("唐子龙")
+        n = self.sm.sandbox_name("李雷")
         self._assert_legal(n)          # 中文不能出现在名字里
 
     def test_long_account(self):
