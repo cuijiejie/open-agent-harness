@@ -82,6 +82,11 @@ def log_request(response):
 # ========== 初始化本地登录（账号 + 可选口令） ==========
 init_auth(app)
 
+# 启动即自检数据库表（幂等）：chat_sessions / chat_messages 没有别的地方会建
+from src.infra.db.bootstrap import ensure_tables  # noqa: E402
+
+ensure_tables()
+
 app.register_blueprint(AuditController, url_prefix='/open-agent-harness')
 app.register_blueprint(TraceController, url_prefix='/open-agent-harness')
 app.register_blueprint(SandboxController, url_prefix='/open-agent-harness')
