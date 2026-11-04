@@ -42,4 +42,5 @@ error_log_format = '%(t)s %(p)s %(h)s "%(r)s" %(s)s %(L)s %(b)s %(f)s" "%(a)s"'
 capture_output = True
 
 # 后台启动
-daemon = True
+# 由 systemd（或容器）托管，不要 self-daemon，否则 systemd 会认为进程已退出
+daemon = False

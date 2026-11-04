@@ -49,7 +49,18 @@ class CheckpointerManager:
                         )
                         cls._instance = InMemorySaver()
                     else:
-                        cls._instance = cls._create_checkpointer()
+                        try:
+                            cls._instance = cls._create_checkpointer()
+                        except Exception as e:  # noqa: BLE001
+                            # 配了 PG 但连不上（密码错、库没建、网络不通）不能让整个应用起不来：
+                            # 退化为内存实现，把原因写进日志，避免“配置一处不对 = 全站不可用”。
+                            from langgraph.checkpoint.memory import InMemorySaver
+
+                            log.error(
+                                "PostgreSQL 连接失败，降级为内存 checkpointer"
+                                "（重启后对话上下文会丢失）：%s", e,
+                            )
+                            cls._instance = InMemorySaver()
         return cls._instance
 
     @classmethod
