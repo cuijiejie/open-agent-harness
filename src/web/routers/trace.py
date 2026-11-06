@@ -18,6 +18,14 @@ from src.web.security import require_login
 router: APIRouter = APIRouter()
 
 
+def _int(raw, default: int, lo: int, hi: int) -> int:
+    try:
+        v: int = int(str(raw).strip()) if raw is not None and str(raw).strip() else default
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, v))
+
+
 @router.get("/api/trace")
 def list_trace(request: Request, username: str = Depends(require_login)):
     try:
@@ -36,9 +44,9 @@ def list_trace(request: Request, username: str = Depends(require_login)):
             kind=str(qp.get("kind") or "").strip(),
             status=str(qp.get("status") or "").strip(),
             tool=str(qp.get("tool") or "").strip(),
-            hours=int(qp.get("hours") or 0),
-            page=int(qp.get("page") or 1),
-            size=int(qp.get("size") or 100),
+            hours=_int(qp.get("hours"), 0, 0, 24 * 365),
+            page=_int(qp.get("page"), 1, 1, 1_000_000),
+            size=_int(qp.get("size"), 100, 1, 500),
         )
         return JSONResponse({"ok": True, **res})
     except Exception as e:
@@ -57,7 +65,7 @@ def purge_trace(payload: dict | None = Body(None), username: str = Depends(requi
 
         from src.infra import TraceService
 
-        days = int((payload or {}).get("days") or 90)
+        days = _int((payload or {}).get("days"), 90, 1, 3650)
         n = TraceService.purge(days)
         log.info(f"清理轨迹: admin={username}, days={days}, 删除={n}")
         return JSONResponse({"ok": True, "deleted": n, "days": days})

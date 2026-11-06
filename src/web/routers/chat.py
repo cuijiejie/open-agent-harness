@@ -46,6 +46,22 @@ _DEDUP_TTL: int = 5           # 去重锁 TTL（秒），同一消息在此时�
 _PROD_ERROR_MSG: str = "服务器繁忙，请稍后重试"
 _RATE_LIMIT_WINDOW: int = 60  # 速率限制窗口（秒）
 _RATE_LIMIT_MAX: int = 30     # 每窗口最大请求数
+# 会话号：前端生成 32 位 hex；DB 列是 VARCHAR(32)，超长会在建会话时抛 DataError，
+# 而那时流式响应已经 200 开始，只能断流。入口先挡掉。
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def _int_param(raw, default: int, lo: int, hi: int) -> int:
+    """宽容解析整数参数：非法/缺省用默认值，并夹到 [lo, hi]"""
+    try:
+        v: int = int(str(raw).strip()) if raw is not None and str(raw).strip() else default
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, v))
+
+
+def _valid_session_id(session_id: str) -> bool:
+    return bool(_SESSION_ID_RE.match(str(session_id or "")))
 
 
 # ============================================================
@@ -144,12 +160,19 @@ def _build_dedup_key(session_id: str, username: str, message: str) -> str:
 
 
 def _safe_error(e: Exception) -> str:
-    """生产环境返回通用错误提示，避免泄露内部信息"""
+    """返回给用户的错误文案：默认只给通用提示，避免泄露内部细节
+
+    注意：不要读 `cfg.env` —— Configs 从来没有这个属性，之前这里会抛 AttributeError，
+    把「业务异常」变成「异常处理器里再抛异常」（500 连 JSON 都回不去）。
+    口径以 `[app] error_detail` 为准（默认 false = 只说人话）。
+    """
     from config.Configs import cfg
 
-    if cfg.env == "pro":
-        return _PROD_ERROR_MSG
-    return str(e)
+    try:
+        verbose: bool = bool(getattr(cfg, "errorDetail", False))
+    except Exception:
+        verbose = False
+    return str(e) if verbose else _PROD_ERROR_MSG
 
 
 async def _acheck_rate_limit(username: str) -> bool:
@@ -230,6 +253,9 @@ async def chat(payload: dict = Body(...), username: str = Depends(require_login)
 
         if not chat_request.session_id:
             return JSONResponse({"error": "请先登录系统"}, status_code=400)
+        if not _valid_session_id(chat_request.session_id):
+            return JSONResponse({"error": "会话号不合法（1~32 位字母/数字/下划线/短横线）"},
+                                status_code=400)
 
         # resume 请求时 message 可为空（仅携带 resume_value）
         if not chat_request.message and not chat_request.resume_value:
@@ -427,6 +453,9 @@ async def chat_upload(
     try:
         if not session_id:
             return JSONResponse({"error": "请先登录系统"}, status_code=400)
+        if not _valid_session_id(session_id):
+            return JSONResponse({"error": "会话号不合法（1~32 位字母/数字/下划线/短横线）"},
+                                status_code=400)
 
         if not await _acheck_rate_limit(username):
             return JSONResponse({"error": "请求过于频繁，请稍后再试"}, status_code=429)
@@ -534,8 +563,8 @@ async def list_sessions(request: Request, username: str = Depends(require_login)
     """分页获取用户的会话列表"""
     try:
         qp = request.query_params
-        page: int = int(qp.get("page", 1))
-        page_size: int = int(qp.get("page_size", 20))
+        page: int = _int_param(qp.get("page"), 1, 1, 1_000_000)
+        page_size: int = _int_param(qp.get("page_size"), 20, 1, 100)
         archived: bool = str(qp.get("archived", "0")).lower() in ("1", "true", "yes")
         result: dict = await SessionDao.list_sessions(username, page, page_size, archived=archived)
         return JSONResponse(result)
@@ -678,7 +707,10 @@ async def delete_session(session_id: str, username: str = Depends(require_login)
 
 @router.get("/api/health")
 async def health_check():
-    """健康检查端点：返回 DB、Redis 连通性状态（不需要登录）"""
+    """健康检查端点：返回 DB、Redis 连通性状态（不需要登录，便于探活）
+
+    只回 ok/error，**不回异常原文**：这里不需要登录，异常里可能带库地址/账号等内部信息。
+    """
     status = {"ok": True, "db": "unknown", "redis": "unknown"}
     try:
         from sqlalchemy import text as sa_text
@@ -687,7 +719,8 @@ async def health_check():
         await db.execute(sa_text("SELECT 1"))
         status["db"] = "ok"
     except Exception as e:
-        status["db"] = f"error: {e}"
+        log.warning(f"健康检查：数据库不可用: {e}")
+        status["db"] = "error"
         status["ok"] = False
     try:
         if redis_util.available:
@@ -696,6 +729,7 @@ async def health_check():
         else:
             status["redis"] = "disconnected"
     except Exception as e:
-        status["redis"] = f"error: {e}"
+        log.warning(f"健康检查：Redis 不可用: {e}")
+        status["redis"] = "error"
         status["ok"] = False
     return JSONResponse(status, status_code=200 if status["ok"] else 503)

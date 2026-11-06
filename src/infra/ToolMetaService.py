@@ -108,7 +108,7 @@ class ToolMetaService:
                     # 它们由 MCP 服务自己声明，靠 ensure_tools() 登记
                     cur.execute(
                         f"UPDATE pa_tools SET ghost=1 "
-                        f"WHERE tool_name NOT IN ({q}) AND tool_name NOT LIKE 'mcp\\_%'",
+                        f"WHERE tool_name NOT IN ({q}) AND tool_name NOT LIKE 'mcp\\_%%'",
                         tuple(names),
                     )
                 else:

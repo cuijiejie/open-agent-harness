@@ -13,6 +13,15 @@ from src.web.security import require_login
 router: APIRouter = APIRouter()
 
 
+def _int(raw, default: int, lo: int, hi: int) -> int:
+    """宽容解析整数：非法/空用默认值，结果夹到 [lo, hi]（避免 500 与大查询）"""
+    try:
+        v: int = int(str(raw).strip()) if raw is not None and str(raw).strip() else default
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, v))
+
+
 @router.get("/api/audit")
 def list_audit(request: Request, username: str = Depends(require_login)):
     try:
@@ -30,8 +39,8 @@ def list_audit(request: Request, username: str = Depends(require_login)):
             result=str(qp.get("result") or "").strip(),
             start=str(qp.get("start") or "").strip(),
             end=str(qp.get("end") or "").strip(),
-            limit=int(qp.get("limit") or 100),
-            offset=int(qp.get("offset") or 0),
+            limit=_int(qp.get("limit"), 100, 1, 1000),
+            offset=_int(qp.get("offset"), 0, 0, 10_000_000),
         )
         return JSONResponse({"ok": True, **res})
     except Exception as e:

@@ -12,6 +12,7 @@
 """
 import time
 import uuid
+from urllib.parse import urlsplit
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -40,6 +41,29 @@ class RequestContextMiddleware:
 
         rid: str = (headers.get("x-request-id") or "").strip() or uuid.uuid4().hex[:12]
         scope.setdefault("state", {})["request_id"] = rid
+
+        # CSRF 兜底：浏览器发起的跨站写请求，Origin 与 Host 不一致就拒绝。
+        # 只校验「带了 Origin 的写请求」——curl/脚本/服务间调用通常不带 Origin，不受影响；
+        # SameSite=Lax 已经挡掉大部分跨站 POST，这里补上同站子域/老浏览器的缺口。
+        if scope.get("method") in ("POST", "PUT", "PATCH", "DELETE"):
+            origin: str = headers.get("origin") or ""
+            if origin:
+                try:
+                    o_host: str = urlsplit(origin).netloc.lower()
+                except Exception:
+                    o_host = ""
+                host: str = (headers.get("host") or "").lower()
+                if not o_host or (host and o_host != host):
+                    log.warning(f"[{rid}] 跨站写请求被拒: {scope.get('method')} {scope.get('path')} "
+                                f"origin={origin!r} host={host!r}")
+                    body = b'{"error":"\\u8de8\\u7ad9\\u8bf7\\u6c42\\u88ab\\u62d2\\u7edd"}'
+                    await send({"type": "http.response.start", "status": 403,
+                                "headers": [(b"content-type", b"application/json"),
+                                            (b"content-length", str(len(body)).encode()),
+                                            (b"x-request-id", rid.encode()),
+                                            (b"cache-control", b"no-store")]})
+                    await send({"type": "http.response.body", "body": body})
+                    return
 
         raw_len: str = headers.get("content-length") or ""
         if raw_len.isdigit() and int(raw_len) > MAX_BODY_BYTES:
@@ -71,6 +95,23 @@ class RequestContextMiddleware:
                 # 接口 JSON 一律禁缓存
                 if path.startswith("/open-agent-harness/api/") and b"cache-control" not in names:
                     hdrs.append((b"cache-control", b"no-store"))
+                # 安全响应头：统一在中间件加，避免每个路由各写一遍/漏写
+                # （/api/artifacts 的 HTML/SVG 自己设了更严格的 CSP sandbox，这里不覆盖）
+                if b"server" in names:      # 不暴露 uvicorn 版本/实现
+                    hdrs = [h for h in hdrs if h[0].lower() != b"server"]
+                    names.discard(b"server")
+                for _hn, _hv in (
+                    (b"x-content-type-options", b"nosniff"),
+                    (b"x-frame-options", b"DENY"),
+                    (b"referrer-policy", b"strict-origin-when-cross-origin"),
+                ):
+                    if _hn not in names:
+                        hdrs.append((_hn, _hv))
+                _is_html = any(h[0].lower() == b"content-type" and b"text/html" in h[1].lower()
+                               for h in hdrs)
+                if _is_html and b"content-security-policy" not in names:
+                    hdrs.append((b"content-security-policy",
+                                 b"frame-ancestors 'none'; base-uri 'self'"))
                 message["headers"] = hdrs
             await send(message)
 

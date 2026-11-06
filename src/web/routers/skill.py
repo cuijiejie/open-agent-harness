@@ -512,6 +512,9 @@ def upload_skill(file: UploadFile = File(...), username: str = Depends(require_l
     **审计 SKILL.md 不通过直接拒绝**；之后只在沙箱里落盘，脚本也只在沙箱里执行。
     """
     _bust_skills_cache()
+    if not sandbox_manager.enabled:
+        return JSONResponse({"error": "沙箱未启用，技能包无法落盘（请管理员开启 OpenShell 后再试）"},
+                            status_code=503)
     if not file or not file.filename:
         return JSONResponse({"error": "文件为空"}, status_code=400)
     if not file.filename.lower().endswith(".zip"):
