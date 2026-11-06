@@ -18,6 +18,8 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from config.Configs import cfg
+from src.web.routers import (audit, chat, knowledge, mcp, platform_skill,
+                             prefs, rbac, sandbox, skill, trace)
 from src.infra.utils.LogUtil import log
 from src.web.middleware import RequestContextMiddleware
 from src.web.pages import LOGIN_HTML
@@ -38,6 +40,22 @@ app: FastAPI = FastAPI(
 # 会话：cookie 名/签名/序列化与 Flask 完全一致 → 切流、回滚都不需要重新登录
 app.add_middleware(FlaskCompatibleSessionMiddleware, secret_key=cfg.secretKey)
 app.add_middleware(RequestContextMiddleware)
+
+# 业务路由：router 里写 /api/xxx，统一挂到 PREFIX 下
+for _r in (audit, trace, chat, knowledge, prefs, mcp, rbac, sandbox, skill, platform_skill):
+    app.include_router(_r.router, prefix=PREFIX)
+
+
+@app.exception_handler(Exception)
+async def _on_unhandled(request: Request, exc: Exception):
+    """兜底 500：接口回 JSON，页面回纯文本"""
+    log.error(f"未捕获异常: {request.method} {request.url.path}: {type(exc).__name__}: {exc}",
+              exc_info=True)
+    if is_api_path(request.url.path):
+        return JSONResponse({"error": "服务器繁忙，请稍后重试"}, status_code=500)
+    from fastapi.responses import PlainTextResponse
+
+    return PlainTextResponse("服务器繁忙，请稍后重试", status_code=500)
 
 if os.path.isdir(os.path.join(_DIST_DIR, "assets")):
     app.mount(f"{PREFIX}/assets", StaticFiles(directory=os.path.join(_DIST_DIR, "assets")),
