@@ -72,24 +72,28 @@ DEFAULT_ROLES: dict[str, dict] = {
         "name": "查看者",
         "tools": _VIEWER_TOOLS,
         "is_admin": 0,
+        "builtin": 0,               # 只是预置示例角色，管理员可以删
         "desc": "只能查询和提问，不能改任何数据",
     },
     "operator": {
         "name": "操作员",
         "tools": _OPERATOR_TOOLS,
         "is_admin": 0,
+        "builtin": 0,               # 只是预置示例角色，管理员可以删
         "desc": "在只读基础上可在沙箱执行命令（写操作由工具内校验 + 对话确认把关，无审批流）",
     },
     "default": {
         "name": "公共角色",
         "tools": [],                 # 播种时用「公共工具」动态填充（见 _always_on）
         "is_admin": 0,
+        "builtin": 1,
         "desc": "默认角色：新建用户自动挂它，只带公共工具",
     },
     "admin": {
         "name": "管理员",
         "tools": ["*"],
         "is_admin": 1,
+        "builtin": 1,
         "desc": "全部权限 + 角色分配 + 技能/MCP 管理",
     },
 }
@@ -289,13 +293,19 @@ class RbacService:
                     # 重启不能被默认值覆盖掉（所以这里不更新 tools 列）
                     cur.execute(
                         "INSERT INTO pa_roles (role_code, role_name, tools, is_approver, is_admin, is_builtin, note) "
-                        "VALUES (%s,%s,%s,0,%s,1,%s) ON DUPLICATE KEY UPDATE role_name=VALUES(role_name), "
-                        "is_admin=VALUES(is_admin), is_builtin=1, note=VALUES(note)",
+                        "VALUES (%s,%s,%s,0,%s,%s,%s) ON DUPLICATE KEY UPDATE role_name=VALUES(role_name), "
+                        "is_admin=VALUES(is_admin), is_builtin=VALUES(is_builtin), note=VALUES(note)",
                         (code, r["name"], json.dumps(r["tools"], ensure_ascii=False),
-                         r["is_admin"], r.get("desc", "")),
+                         r["is_admin"], int(r.get("builtin", 0)), r.get("desc", "")),
                     )
-                # 默认角色（公共角色）必须存在：新建用户默认挂它（部署保证，幂等）
+                # 内置标记归一：只有「管理员」和「默认角色（公共角色）」是系统角色，
+                # 其余预置角色（操作员/查看者）只是示例，允许管理员删除。
                 _dc: str = self.default_role_code()
+                cur.execute("UPDATE pa_roles SET is_builtin=0 WHERE role_code IN ('viewer','operator')")
+                cur.execute("UPDATE pa_roles SET is_builtin=1 WHERE role_code='admin'")
+                if _dc:
+                    cur.execute("UPDATE pa_roles SET is_builtin=1 WHERE role_code=%s", (_dc,))
+                # 默认角色（公共角色）必须存在：新建用户默认挂它（部署保证，幂等）
                 if _dc:
                     _pub_tools: list[str] = list(_always_on())
                     cur.execute(
