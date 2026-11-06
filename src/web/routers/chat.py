@@ -500,6 +500,13 @@ async def chat_upload(
             _original = f"{_safe_base}.{_ext}" if _safe_base else f"upload_{uuid.uuid4().hex[:8]}.{_ext}"
 
             _tmp = os.path.join(user_upload_dir, f"{uuid.uuid4().hex}.{_ext}")
+            # 已知大小就先卡总量，别等整包落盘才拒绝（否则一次请求就能把磁盘写满）
+            _declared: int = int(getattr(_f, "size", 0) or 0)
+            if _declared > 0 and _total + _declared > TOTAL_UPLOAD_BYTES:
+                _cleanup_saved(saved)
+                return JSONResponse({
+                    "error": f"单次上传总大小不能超过 {TOTAL_UPLOAD_BYTES // 1024 // 1024}MB"
+                }, status_code=400)
             with open(_tmp, "wb") as _out:
                 shutil.copyfileobj(_f.file, _out)
             _size: int = os.path.getsize(_tmp) if os.path.isfile(_tmp) else 0
