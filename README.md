@@ -69,9 +69,6 @@ uvicorn src.app_fastapi:app --host 0.0.0.0 --port 5001 --workers 4   # http://lo
 **逐步骤部署、可选组件（沙箱 / MCP / PG / Redis）、设管理员、Nginx、运维、排障**
 见 [`docs/部署说明.md`](docs/部署说明.md)。
 
-**想知道服务端为什么是 FastAPI、异步化改了什么、有哪些坑**
-见 [`docs/迁移说明-Flask到FastAPI.md`](docs/迁移说明-Flask到FastAPI.md)。
-
 ## 目录结构
 
 ```
