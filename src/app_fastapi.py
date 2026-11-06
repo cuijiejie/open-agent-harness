@@ -154,10 +154,24 @@ async def api_version():
 
 @app.get(f"{PREFIX}/api/user/currentUser")
 async def current_user(username: str = Depends(require_login), request: Request = None):
+    """当前用户信息
+
+    displayName **以数据库 pa_users.display_name 为准**：登录时 session 里存的是当时的快照，
+    而管理员可能事后改了中文名；session 里没有时再查库，最后才退回账号。
+    """
+    display: str = str(get_current_display_name(request) or "").strip()
+    if not display:
+        try:
+            from src.infra.RbacService import rbac
+
+            _row: dict | None = rbac.user_row(username)
+            display = str((_row or {}).get("display_name") or "").strip()
+        except Exception:
+            display = ""
     return JSONResponse({
         "userAccount": username,
         "username": username,
-        "displayName": get_current_display_name(request),
+        "displayName": display or username,
     })
 
 
@@ -260,7 +274,7 @@ async def login_submit(request: Request):
 
     rbac.touch_user(username, _row.get("display_name") or "")
     request.session[SESSION_USER] = username
-    request.session[SESSION_DISPLAY] = ""
+    request.session[SESSION_DISPLAY] = str(_row.get("display_name") or "")
     log.info(f"登录成功: user={username}")
     _init_sandbox_async(username)
     return RedirectResponse(nxt, status_code=302)
