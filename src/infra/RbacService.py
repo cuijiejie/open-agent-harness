@@ -80,6 +80,12 @@ DEFAULT_ROLES: dict[str, dict] = {
         "is_admin": 0,
         "desc": "在只读基础上可在沙箱执行命令（写操作由工具内校验 + 对话确认把关，无审批流）",
     },
+    "default": {
+        "name": "公共角色",
+        "tools": [],                 # 播种时用「公共工具」动态填充（见 _always_on）
+        "is_admin": 0,
+        "desc": "默认角色：新建用户自动挂它，只带公共工具",
+    },
     "admin": {
         "name": "管理员",
         "tools": ["*"],
@@ -288,10 +294,31 @@ class RbacService:
                         (code, r["name"], json.dumps(r["tools"], ensure_ascii=False),
                          r["is_admin"], r.get("desc", "")),
                     )
-                # 默认角色（公用角色）也算系统内置 → 角色管理里不允许删除
+                # 默认角色（公共角色）必须存在：新建用户默认挂它（部署保证，幂等）
                 _dc: str = self.default_role_code()
                 if _dc:
-                    cur.execute("UPDATE pa_roles SET is_builtin=1 WHERE role_code=%s", (_dc,))
+                    _pub_tools: list[str] = list(_always_on())
+                    cur.execute(
+                        "INSERT IGNORE INTO pa_roles "
+                        "(role_code, role_name, tools, is_approver, is_admin, is_builtin, note) "
+                        "VALUES (%s,%s,%s,0,0,1,%s)",
+                        (_dc, DEFAULT_ROLES.get(_dc, {}).get("name", _dc),
+                         json.dumps(_pub_tools, ensure_ascii=False),
+                         DEFAULT_ROLES.get(_dc, {}).get("desc", "默认角色")),
+                    )
+                    # 老库里的 display name 可能还是编码本身（default），统一改成「公共角色」
+                    cur.execute(
+                        "UPDATE pa_roles SET role_name=%s WHERE role_code=%s "
+                        "AND (role_name IS NULL OR role_name='' OR role_name=role_code)",
+                        (DEFAULT_ROLES[_dc]["name"], _dc),
+                    )
+                    # 内置不可删；工具若为空（老库第一次补这条角色）则用公共工具填一次，不覆盖已有配置
+                    cur.execute(
+                        "UPDATE pa_roles SET is_builtin=1, "
+                        "tools=IF(tools IS NULL OR JSON_LENGTH(tools)=0, %s, tools) "
+                        "WHERE role_code=%s",
+                        (json.dumps(_pub_tools, ensure_ascii=False), _dc),
+                    )
             self._schema_ready = True
             log.info("RBAC 表就绪（权限只来自数据库：pa_roles / pa_user_roles / pa_users）")
             return True
@@ -854,6 +881,10 @@ class RbacService:
                      self.hash_password(str(password or "").strip() or self.DEFAULT_NEW_USER_PASSWORD)),
                 )
             codes: list[str] = [r for r in (roles or []) if str(r).strip()]
+            if not codes:                     # 不传角色 → 默认挂公共角色
+                _d: str = self.default_role_code()
+                if _d:
+                    codes = [_d]
             if codes:
                 self.assign(user, codes)
             else:
