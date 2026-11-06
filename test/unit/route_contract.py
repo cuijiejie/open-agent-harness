@@ -15,6 +15,8 @@ sys.path.insert(0, ROOT)
 
 # 系统路由：由 app_fastapi 自己提供，controller 里也有同名（如 /logout），
 # 或属于前端静态/探针，不计入"多出"
+PREFIX: str = "/open-agent-harness"
+
 SYS_EXTRA = {
     ("GET", "/"), ("GET", "/logout"), ("POST", "/logout"),
     ("GET", "/api/version"), ("GET", "/api/user/currentUser"),
@@ -52,7 +54,11 @@ def actual() -> set:
         for meth in (getattr(r, "methods", None) or set()):
             if meth in ("HEAD", "OPTIONS"):
                 continue
-            out.add((meth.upper(), norm(getattr(r, "path", ""))))
+            p: str = getattr(r, "path", "")
+            # 业务路由挂在 PREFIX 下，比对前先剥掉（否则会误报"全部缺失"）
+            if p.startswith(PREFIX):
+                p = p[len(PREFIX):] or "/"
+            out.add((meth.upper(), norm(p)))
     return out
 
 
