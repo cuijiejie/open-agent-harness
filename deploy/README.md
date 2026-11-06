@@ -7,7 +7,7 @@
 | 文件 | 用途 |
 |---|---|
 | `install.sh` | **一键安装/升级**（venv + 依赖 + 前端构建 + .env + systemd + 探活） |
-| `open-agent-harness.service` | 应用服务单元（gunicorn，gthread 6×4） |
+| `open-agent-harness.service` | 应用服务单元（uvicorn，多 worker） |
 | `pa-logs.service/.timer` | 每天 03:00 UTC 日志切分 + 清理 |
 | `pa-artifacts.service/.timer` | 每天 03:10 UTC 交付物 90 天清理 |
 | `pa-sandbox-idle.service/.timer` | 每天 03:20 UTC 闲置沙箱 stop（只停不删） |

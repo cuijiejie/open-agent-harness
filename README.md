@@ -61,7 +61,7 @@ pip install -r requirements.txt
 export PA_DB_MYSQL_PASS=xxx PA_LLM_DEEPSEEK_API_KEY=sk-xxx
 export PA_APP_SECRET_KEY=$(python -c "import secrets;print(secrets.token_hex(32))")
 cd frontend && npm ci && npm run build && cd ..
-python AgentApp.py                                 # http://localhost:5001/open-agent-harness/
+uvicorn src.app_fastapi:app --host 0.0.0.0 --port 5001 --workers 4   # http://localhost:5001/open-agent-harness/
 ```
 
 开发环境可用免密直登：`/open-agent-harness/test-login`（对外开放务必关闭）。
@@ -69,16 +69,19 @@ python AgentApp.py                                 # http://localhost:5001/open-
 **逐步骤部署、可选组件（沙箱 / MCP / PG / Redis）、设管理员、Nginx、运维、排障**
 见 [`docs/部署说明.md`](docs/部署说明.md)。
 
+**想知道服务端为什么是 FastAPI、异步化改了什么、有哪些坑**
+见 [`docs/迁移说明-Flask到FastAPI.md`](docs/迁移说明-Flask到FastAPI.md)。
+
 ## 目录结构
 
 ```
 src/
 ├── agent/            智能体内核：中间件、工具注册、沙箱后端、MCP 客户端
 ├── chat/             SSE 流式、上下文注入、产物回传
-├── controller/       REST 接口（10 个蓝图）
-├── infra/            RBAC、缓存、审计、维护任务
+├── web/              FastAPI 视图层（routers/ 10 个模块 + 会话/鉴权/中间件）
+├── infra/            RBAC、缓存、审计、维护任务、异步数据层
 ├── plugins/tools/    业务插件（自带 demo 示例，照着加自己的工具）
-└── app.py            Flask 应用装配
+└── app_fastapi.py    应用装配（uvicorn 入口）
 frontend/             Vue 3 单页应用
 config/               Configs.py + configs.cfg（只放非敏感项，密钥走环境变量）
 deploy/               systemd 单元、验收脚本、维护定时器
@@ -100,7 +103,7 @@ src/plugins/tools/hello/
 
 ## 技术栈
 
-Flask 3 · LangGraph 1 · deepagents · LangChain 1 · Vue 3 · MySQL · PostgreSQL · Redis（可选）· OpenShell（可选）
+FastAPI · LangGraph 1 · deepagents · LangChain 1 · Vue 3 · MySQL · PostgreSQL · Redis（可选）· OpenShell（可选）
 
 ## 许可证
 

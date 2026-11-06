@@ -12,12 +12,12 @@ WorkingDirectory=/opt/open-agent-harness
 EnvironmentFile=-/opt/open-agent-harness/.env
 Environment=PYTHONUNBUFFERED=1
 
-# 并发参数都在 gun_conf.py 里（6 worker × 4 thread = 24 并发槽、gthread、timeout 1300），
-# 这里只覆盖监听地址。要改并发请改 gun_conf.py，别在单元文件里另写一套。
-ExecStart=/opt/open-agent-harness/.venv/bin/gunicorn \
-  --config /opt/open-agent-harness/gun_conf.py \
-  --bind 0.0.0.0:5001 \
-  AgentApp:app
+# 并发模型：uvicorn 多进程 worker（异步 IO，一条 SSE 不占线程）。
+# worker 数按内存给：每个 worker 常驻约 300~400MB（含 langgraph 依赖）。
+Environment=PYTHONPATH=/opt/open-agent-harness
+ExecStart=/opt/open-agent-harness/.venv/bin/python -m uvicorn \
+  src.app_fastapi:app \
+  --host 0.0.0.0 --port 5001 --workers 4
 
 Restart=always
 RestartSec=5

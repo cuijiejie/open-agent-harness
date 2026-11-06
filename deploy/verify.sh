@@ -53,7 +53,7 @@ else
 fi
 
 head "7) 后端单测"
-if $PY -c "import langchain_core, flask" >/dev/null 2>&1; then
+if $PY -c "import langchain_core, fastapi, uvicorn" >/dev/null 2>&1; then
   $PY -m unittest discover -s test/unit -q 2>&1 | tail -4 || bad "单测失败"
 else
   echo "  跳过（当前解释器没装依赖）"

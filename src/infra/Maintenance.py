@@ -8,7 +8,7 @@
 三件事
 ------
 1. **日志切分**：把 `logs/app.log` 复制成 `logs/app_YYYYMMDD.log` 然后清空原文件
-   （copytruncate 语义：gunicorn 的 6 个 worker 还拿着原 fd，直接 rename 会让它们
+   （copytruncate 语义：多个 worker 还拿着原 fd，直接 rename 会让它们
    继续往旧文件里写，所以只能"复制 + 截断"）
 2. **日志清理**：删掉 365 天前的 `*_YYYYMMDD.log` 和 `.jsonl`（按天切的历史文件）
 3. **交付物清理**：删掉 `artifacts/<用户>/<会话>/` 里 90 天没动过的目录
@@ -46,7 +46,7 @@ def rotate_logs(pairs: list[tuple[Path, Path]] | None = None, today: datetime | 
                 dry_run: bool = False) -> list[dict]:
     """把未切分的 *.log 复制成 `<名字>_YYYYMMDD.log` 并清空原文件（copytruncate）
 
-    pairs: [(源目录, 归档目录)]。默认把仓库根目录的 gunicorn 日志也切进 logs/
+    pairs: [(源目录, 归档目录)]。默认把仓库根目录的历史日志也切进 logs/
     （根目录一直挂着 4~5MB 的 open_agent_harness.log，以前没人管）。
 
     今天已经切过的跳过（避免一天切多次）；空文件也跳过（省得造一堆 0 字节）。

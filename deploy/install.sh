@@ -144,7 +144,7 @@ PY
 blue "6/7 安装 systemd 服务"
 if [ ! -w /etc/systemd/system ] || [ "$(id -u)" != "0" ]; then
   warn "非 root：跳过 systemd，改为前台试跑"
-  echo "    手动启动：cd $APP_DIR && .venv/bin/gunicorn -c gun_warm.py -b 0.0.0.0:$PORT AgentApp:app"
+  echo "    手动启动：cd $APP_DIR && PYTHONPATH=. .venv/bin/python -m uvicorn src.app_fastapi:app --host 0.0.0.0 --port $PORT --workers 4"
 else
   sed -e "s#/opt/open-agent-harness#$APP_DIR#g" -e "s#0.0.0.0:5001#0.0.0.0:$PORT#g" \
     deploy/open-agent-harness.service > "/etc/systemd/system/$SERVICE.service"

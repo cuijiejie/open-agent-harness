@@ -4,7 +4,7 @@
 2. 改动前先建 issue 说明动机，避免做完发现方向不一致
 3. 提交前自查：
    ```bash
-   python -m compileall -q src config AgentApp.py
+   python -m compileall -q src config
    cd frontend && npm run build
    python -m unittest discover -s test/unit -t . -q
    ```

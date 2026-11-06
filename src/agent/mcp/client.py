@@ -291,7 +291,7 @@ class McpManager:
     def describe_servers(self, connect: bool = True) -> list[dict]:
         """管理面用：列出已配置的 MCP 服务（**按需连接**，连上后带工具清单）
 
-        为什么要在这里 load_tools()：gunicorn 多 worker 各自持有连接，
+        为什么要在这里 load_tools()：uvicorn 多 worker 各自持有连接，
         管理接口的请求可能落到还没连过的 worker 上 —— 不主动连就会出现
         "刚测试连接成功、列表却显示未连接"的假象。
         """

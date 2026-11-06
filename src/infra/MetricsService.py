@@ -16,7 +16,7 @@
 
 LangSmith（可选，配了才启用）：
 在 `[observability]` 里配 `langsmith_tracing=true` + `langsmith_api_key`，
-AgentApp 启动时会把 LANGCHAIN_* 环境变量设好，LangChain 自动上报 trace。
+应用启动时会把 LANGCHAIN_* 环境变量设好，LangChain 自动上报 trace。
 """
 from __future__ import annotations
 

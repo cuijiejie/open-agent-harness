@@ -4,7 +4,7 @@
 
 日志文件固定落在 <仓库根>/logs/app.log：
 以前是 `dirname(__file__) + '/..'` → 实际落到了 src/infra/open_agent_harness.log，
-和 gunicorn 写在仓库根的 open_agent_harness.log 重名但不同文件，运维排查时经常看错。
+和早期 gunicorn 写在仓库根的 open_agent_harness.log 重名但不同文件，运维排查时经常看错。
 """
 import logging
 import os
@@ -36,11 +36,16 @@ if not log.handlers:
         rf_handler = logging.StreamHandler()
     rf_handler.setLevel(logging.INFO)
 
-    # 注意：不添加 StreamHandler(stdout) —— gunicorn 配置了 capture_output=True，
-    # 会把 worker 的 stdout 重定向到 errorlog（open_agent_harness.log），
-    # 若再加 stdout handler 会导致每条日志写文件两遍（重复输出）。
-
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     rf_handler.setFormatter(formatter)
 
     log.addHandler(rf_handler)
+
+    # 同时输出到 stdout：uvicorn/systemd 会把 stdout 收进 journald，
+    # 这样 `journalctl -u open-agent-harness` 里能直接看到业务日志。
+    # （早期 Flask+gunicorn 时代不能这么做：gunicorn 配了 capture_output，
+    #   会把 worker stdout 重定向到 errorlog，再加 handler 就会每行写两遍。）
+    sh: logging.Handler = logging.StreamHandler()
+    sh.setLevel(logging.INFO)
+    sh.setFormatter(formatter)
+    log.addHandler(sh)
