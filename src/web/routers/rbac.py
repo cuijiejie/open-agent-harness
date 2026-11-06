@@ -80,6 +80,7 @@ def create_user(payload: dict | None = Body(None), username: str = Depends(requi
         str(body.get("username") or ""),
         str(body.get("display_name") or ""),
         list(body.get("roles") or []),
+        str(body.get("password") or ""),      # 不传则用默认密码 123456
     )
     if res.get("ok"):
         try:
@@ -87,6 +88,27 @@ def create_user(payload: dict | None = Body(None), username: str = Depends(requi
         except Exception:
             pass
         log.warning(f"新增用户: 操作人={username}, 目标={res['username']}, 角色={res.get('roles')}")
+        return JSONResponse(res)
+    return JSONResponse(res, status_code=400)
+
+
+@router.post("/api/users/{target}/password")
+def reset_password(target: str, payload: dict | None = Body(None),
+                   username: str = Depends(require_login)):
+    """管理员重置密码：{"password": "xxx"}；不传则重置为默认 123456
+
+    用户忘记密码时唯一的自助恢复入口（系统没有邮箱/短信找回）。
+    """
+    if not rbac.is_admin(username):
+        return JSONResponse({"ok": False, "error": "只有管理员可以重置密码"}, status_code=403)
+    body: dict = payload or {}
+    pwd: str = str(body.get("password") or "").strip()
+    if pwd and len(pwd) < 6:
+        return JSONResponse({"ok": False, "error": "密码至少 6 位"}, status_code=400)
+    res: dict = rbac.set_password(target, pwd)
+    if res.get("ok"):
+        log.warning(f"重置密码: 操作人={username}, 目标={target}, "
+                    f"{'使用默认密码' if not pwd else '自定义密码'}")
         return JSONResponse(res)
     return JSONResponse(res, status_code=400)
 

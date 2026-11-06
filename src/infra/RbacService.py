@@ -264,6 +264,17 @@ class RbacService:
                       KEY idx_status (status)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """)
+                # 密码列：老库自动补列（MySQL 的 ADD COLUMN 不支持 IF NOT EXISTS）
+                cur.execute(
+                    "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='pa_users' "
+                    "AND COLUMN_NAME='password_hash'"
+                )
+                if int(cur.fetchone()[0] or 0) == 0:
+                    cur.execute("ALTER TABLE pa_users ADD COLUMN password_hash VARCHAR(255) NULL")
+                    log.warning("pa_users 新增 password_hash 列；存量账号密码为空，"
+                                "需管理员在「用户管理」里重置后才能登录")
+
                 # 预置角色只在「角色表为空」时初始化：管理员删掉的预置角色不会被重启复活
                 cur.execute("SELECT COUNT(*) FROM pa_roles")
                 _seed_items = list(DEFAULT_ROLES.items()) if int(cur.fetchone()[0] or 0) == 0 else []
@@ -412,35 +423,96 @@ class RbacService:
             _redis_clear_all()
 
     # ---------- 用户主数据（登录建档 / 启停 / 列表） ----------
-    def touch_user(self, username: str, display_name: str = "") -> None:
-        """登录时建档或更新（display_name 非空才覆盖，避免把中文名冲掉）
+    # ---------- 密码 ----------
+    DEFAULT_NEW_USER_PASSWORD: str = "123456"
 
-        **首次登录（新建档）的账号自动分配默认角色**（[app] default_role，缺省 default）。
-        已有账号一律不动：管理员手工收回角色的账号不会被自动补回去。
+    @staticmethod
+    def _bcrypt(plain: str) -> bytes:
+        """bcrypt 只取前 72 字节（超长会被新版本库直接拒绝）"""
+        return str(plain or "").encode("utf-8")[:72]
+
+    @classmethod
+    def hash_password(cls, plain: str) -> str:
+        """bcrypt 哈希（每次随机盐；cost=12）"""
+        import bcrypt
+
+        return bcrypt.hashpw(cls._bcrypt(plain), bcrypt.gensalt(rounds=12)).decode("ascii")
+
+    @classmethod
+    def check_password_hash(cls, stored: str, plain: str) -> bool:
+        """常数时间比对；哈希为空/格式坏一律 False"""
+        import bcrypt
+
+        if not stored or not str(stored).startswith("$2"):
+            return False
+        try:
+            return bool(bcrypt.checkpw(cls._bcrypt(plain), str(stored).encode("utf-8")))
+        except Exception:
+            return False
+
+    def user_row(self, username: str) -> dict | None:
+        """取用户记录（不存在返回 None）"""
+        user: str = (username or "").strip()
+        if not user:
+            return None
+        self.ensure_schema()
+        try:
+            with self._conn() as c, c.cursor() as cur:
+                cur.execute(
+                    "SELECT username, display_name, status, password_hash FROM pa_users WHERE username=%s",
+                    (user,),
+                )
+                r = cur.fetchone()
+        except Exception as e:
+            log.warning(f"查询用户失败: user={user}, err={e}")
+            return None
+        if not r:
+            return None
+        return {"username": r[0], "display_name": r[1] or "", "status": r[2] or "",
+                "password_hash": r[3] or ""}
+
+    def verify_password(self, username: str, plain: str) -> bool:
+        """校验账号密码：账号不存在 / 未设密码 / 密码错 → False"""
+        row: dict | None = self.user_row(username)
+        if not row or not row["password_hash"]:
+            return False
+        return self.check_password_hash(row["password_hash"], plain)
+
+    def set_password(self, username: str, plain: str = "") -> dict:
+        """设置/重置密码（空密码按默认 123456 处理）；账号不存在则拒绝"""
+        row: dict | None = self.user_row(username)
+        if not row:
+            return {"ok": False, "error": f"用户 {username} 不存在"}
+        pwd: str = str(plain or "").strip() or self.DEFAULT_NEW_USER_PASSWORD
+        try:
+            h: str = self.hash_password(pwd)
+            with self._conn() as c, c.cursor() as cur:
+                cur.execute("UPDATE pa_users SET password_hash=%s WHERE username=%s", (h, row["username"]))
+        except Exception as e:
+            log.error(f"设置密码失败: user={username}, err={e}")
+            return {"ok": False, "error": "密码保存失败"}
+        log.warning(f"密码已变更: user={row['username']}")
+        return {"ok": True, "username": row["username"]}
+
+    def touch_user(self, username: str, display_name: str = "") -> None:
+        """登录成功后只更新最后登录时间（**不再建档**）
+
+        账号只能由管理员通过「用户管理」（POST /api/users）创建。历史上这里会
+        "不存在就建号并分配默认角色"，等于任何字符串都能注册进系统——已删除。
         """
         user: str = (username or "").strip()
         if not user:
             return
-        is_new: bool = False
         try:
             self.ensure_schema()
             with self._conn() as c, c.cursor() as cur:
-                cur.execute("SELECT 1 FROM pa_users WHERE username=%s", (user,))
-                is_new = cur.fetchone() is None
                 cur.execute(
-                    "INSERT INTO pa_users (username, display_name, last_login) VALUES (%s,%s,NOW()) "
-                    "ON DUPLICATE KEY UPDATE last_login=NOW(), "
-                    "display_name=IF(VALUES(display_name)<>'', VALUES(display_name), display_name)",
-                    (user, (display_name or "")[:128]),
+                    "UPDATE pa_users SET last_login=NOW(), "
+                    "display_name=IF(%s<>'', %s, display_name) WHERE username=%s",
+                    ((display_name or "")[:128], (display_name or "")[:128], user),
                 )
         except Exception as e:
-            log.warning(f"用户建档失败（不影响登录）: user={user}, err={e}")
-            return
-        if is_new:
-            try:
-                self._assign_default_role(user)
-            except Exception as e:      # 双保险：登录绝不能因为分配角色失败而崩
-                log.warning(f"分配默认角色异常（不影响登录）: user={user}, err={e}")
+            log.warning(f"更新登录时间失败（不影响登录）: user={user}, err={e}")
 
     def default_role_code(self) -> str:
         """配置里的默认角色编码（[app] default_role，缺省 default）"""
@@ -754,8 +826,12 @@ class RbacService:
         return {"roles": roles, "total": total, "page": pg, "page_size": size}
 
     # ---------- 用户增删改 ----------
-    def create_user(self, username: str, display_name: str = "", roles: list[str] | None = None) -> dict:
-        """新增用户；已存在则拒绝（避免悄悄覆盖别人的角色）"""
+    def create_user(self, username: str, display_name: str = "", roles: list[str] | None = None,
+                    password: str = "") -> dict:
+        """新增用户；已存在则拒绝（避免悄悄覆盖别人的角色）
+
+        password 为空时用默认密码 123456（管理员可在建号时指定）。
+        """
         user: str = (username or "").strip()
         if not user:
             return {"ok": False, "error": "域账号不能为空"}
@@ -770,9 +846,12 @@ class RbacService:
                 if row and str(row[0]) != "deleted":
                     return {"ok": False, "error": f"用户 {user} 已存在"}
                 cur.execute(
-                    "INSERT INTO pa_users (username, display_name, status) VALUES (%s,%s,'active') "
-                    "ON DUPLICATE KEY UPDATE display_name=VALUES(display_name), status='active'",
-                    (user, (display_name or "")[:128]),
+                    "INSERT INTO pa_users (username, display_name, status, password_hash) "
+                    "VALUES (%s,%s,'active',%s) "
+                    "ON DUPLICATE KEY UPDATE display_name=VALUES(display_name), status='active', "
+                    "password_hash=VALUES(password_hash)",
+                    (user, (display_name or "")[:128],
+                     self.hash_password(str(password or "").strip() or self.DEFAULT_NEW_USER_PASSWORD)),
                 )
             codes: list[str] = [r for r in (roles or []) if str(r).strip()]
             if codes:
