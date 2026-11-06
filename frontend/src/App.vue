@@ -107,6 +107,7 @@
         </div>
 
         <!-- 左下角：当前登录用户（点整块进「个人设置」；退出按钮独立且醒目） -->
+        <div class="user-bar">
         <div class="user-card">
           <div class="user-avatar" :title="`${userLabel} · 个人设置`" @click="openMeTab('prefs')">
             <img class="user-avatar-img" :src="avatarSrc" alt="默认头像"
@@ -117,14 +118,8 @@
             <div class="user-name">{{ userLabel }}</div>
             <div class="user-sub" v-if="userRoleLabel && userRoleLabel !== userLabel">{{ userRoleLabel }}</div>
           </div>
-          <button type="button" class="user-exit" title="退出登录" @click="doLogout">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M15 17l5-5-5-5"/><path d="M20 12H9"/>
-              <path d="M12 19H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/>
-            </svg>
-            <span>退出</span>
-          </button>
+          <button type="button" class="user-exit" title="退出登录" @click.stop="doLogout">退出登录</button>
+        </div>
         </div>
       </aside>
     </Transition>
@@ -3702,24 +3697,28 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
   border-right: 1px solid #e2e8f0;
 }
 /* ===== 左下角用户信息（头像 + 姓名/角色 + 圆形操作按钮） ===== */
-.user-card {
-  position: relative;
+.user-bar {
   margin-top: auto;
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px 10px 14px; border-top: 1px solid rgba(148, 163, 184, .22);
+  border-top: 1px solid rgba(148, 163, 184, .22);
+  padding: 8px 6px 10px;
 }
+.user-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 8px; border-radius: 10px;
+  transition: background .15s ease;
+}
+.user-card:hover { background: #eef2f9; }
 /* 头像 + 名字整块可点 → 打开「个人设置」页 */
 .user-avatar, .user-meta { cursor: pointer; }
 .user-card:hover .user-name { color: #4F46E5; }
-/* 退出：带文字的胶囊按钮，和侧栏其它控件同高，不再是一个小方块 */
+/* 退出登录：安静的文字按钮，平时不抢眼，hover 才提示危险色 */
 .user-exit {
-  display: flex; align-items: center; gap: 5px; flex: 0 0 auto;
-  height: 32px; padding: 0 10px; border-radius: 8px; cursor: pointer;
-  font-size: 12.5px; color: #64748b; background: #fff;
-  border: 1px solid #e2e8f5; transition: all .15s ease;
+  flex: 0 0 auto; padding: 4px 6px; border: none; background: none;
+  border-radius: 6px; cursor: pointer;
+  font-size: 12.5px; color: #94a3b8; line-height: 1.2;
+  transition: color .15s ease, background .15s ease;
 }
-.user-exit:hover { color: #dc2626; border-color: #fecaca; background: #fef2f2; }
-.user-exit svg { flex: 0 0 auto; }
+.user-exit:hover { color: #dc2626; background: #fee2e2; }
 
 /* ===== 个人设置页（偏好 / 业务知识 / 修改密码）===== */
 .me-wrap { max-width: 720px; padding: 18px 22px 26px; }
@@ -3729,7 +3728,7 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 .me-hint { font-size: 12px; color: #94a3b8; margin-left: 6px; }
 .me-save { margin-top: 20px; align-self: flex-start; padding: 9px 22px; }
 .user-avatar {
-  width: 40px; height: 40px; flex: 0 0 auto; border-radius: 50%;
+  width: 36px; height: 36px; flex: 0 0 auto; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   font-size: 16px; font-weight: 700; color: #fff;
   background: #eef2ff; border: 1px solid #e2e8f5; overflow: hidden;
