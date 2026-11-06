@@ -42,10 +42,9 @@ LOGIN_HTML: str = """<!DOCTYPE html>
     <label for="username">用户名</label>
     <input id="username" name="username" placeholder="例如 alice" autofocus
            autocomplete="username" required>
-    {% if need_password %}
-    <label for="password" style="margin-top:14px">口令</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
-    {% endif %}
+    <label for="password" style="margin-top:14px">密码</label>
+    <input id="password" name="password" type="password" placeholder="请输入密码"
+           autocomplete="current-password" required>
     <button type="submit">进入</button>
     {% if error %}<div class="err">{{ error }}</div>{% endif %}
   </form>

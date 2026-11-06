@@ -47,13 +47,16 @@ async def lifespan(_app: FastAPI):
 
     await init_checkpointer_async()
     log.info(f"FastAPI 启动: prefix={PREFIX}, pid={os.getpid()}")
-    # 安全自检：这两项在生产暴露就是「任何人可当 admin」，必须显式告警
-    if not _need_password():
-        log.warning("安全警告：登录口令为空（[app] login_password / PA_APP_LOGIN_PASSWORD）——"
-                    "任何知道用户名（包括 admin）的人都能直接登录；对外提供服务前必须设置")
-    if cfg.testLoginEnabled:
-        log.warning("安全警告：[app] test_login_enabled=true —— /test-login 可用任意用户名免密登录；"
-                    "对外提供服务前必须设为 false")
+    # 安全自检：没有密码的账号等于"知道用户名也进不来"，但 admin 必须是可用的
+    try:
+        from src.infra.RbacService import rbac as _rbac
+
+        _adm: dict | None = _rbac.user_row("admin")
+        if _adm is not None and not _adm["password_hash"]:
+            log.warning("安全警告：admin 账号未设置密码，当前无人可登录；"
+                        "请执行 python -m deploy.seed_admin 初始化（默认密码 admin）")
+    except Exception:
+        pass
     yield
     log.info(f"FastAPI 关闭: pid={os.getpid()}")
 
@@ -136,14 +139,6 @@ async def index(request: Request):
     return _serve("index.html")
 
 
-@app.get(f"{PREFIX}/test.html")
-async def test_page():
-    """联调测试页：只在 test_login 开启（开发/测试环境）时暴露"""
-    if not cfg.testLoginEnabled:
-        return JSONResponse({"error": "未开启"}, status_code=404)
-    return _serve("test.html")
-
-
 @app.get(f"{PREFIX}/api/version")
 async def api_version():
     """前端构建信息（排缓存用），口径与 Flask 完全一致"""
@@ -167,10 +162,6 @@ async def current_user(username: str = Depends(require_login), request: Request 
 
 
 # ---------------- 登录 / 登出 ----------------
-
-def _need_password() -> bool:
-    return bool(str(getattr(cfg, "loginPassword", "") or "").strip())
-
 
 def _safe_next(nxt: str) -> str:
     """只允许站内回跳，挡住 `next=https://evil` / `//evil` / `/\\evil` 这类开放重定向"""
@@ -219,10 +210,8 @@ def _render_login(error: str = "") -> str:
     `{% if need_password %}` 原样吐到页面上（切 FastAPI 后真实发生过的 bug）。
     变量口径与 Flask 侧完全一致：hint / need_password / error。
     """
-    need: bool = _need_password()
-    hint: str = ("口令由部署者设置（[app] login_password）；留空即免密登录。"
-                 if need else "输入用户名即可进入。")
-    return Template(LOGIN_HTML).render(need_password=need, hint=hint, error=error)
+    hint: str = "请使用管理员分配的账号和密码登录。"
+    return Template(LOGIN_HTML).render(hint=hint, error=error)
 
 
 @app.get(f"{PREFIX}/login")
@@ -252,60 +241,30 @@ async def login_submit(request: Request):
         return HTMLResponse(_render_login("用户名不能为空"), status_code=400)
     if not _valid_username(username):
         return HTMLResponse(_render_login("用户名不合法（不能含 / \\ .. 或控制字符）"), status_code=400)
-    if _need_password() and password != cfg.loginPassword:
-        log.warning(f"登录失败（口令错误）: user={username}")
-        return HTMLResponse(_render_login("用户名或口令不正确"), status_code=401)
+    if not password:
+        return HTMLResponse(_render_login("请输入密码"), status_code=400)
+    from src.infra.RbacService import rbac as _rbac
+
+    _row: dict | None = _rbac.user_row(username)
+    # 账号不存在 / 已停用 → 同一提示，不泄露账号是否存在
+    if not _row or str(_row.get("status") or "") != "active":
+        log.warning(f"登录失败（账号不存在或已停用）: user={username}, ip={client_ip(request)}")
+        return HTMLResponse(_render_login("用户名或密码错误"), status_code=401)
+    if not _row.get("password_hash"):
+        log.warning(f"登录失败（账号未设密码，需管理员重置）: user={username}")
+        return HTMLResponse(_render_login("该账号尚未设置密码，请联系管理员"), status_code=401)
+    if not _rbac.verify_password(username, password):
+        log.warning(f"登录失败（密码错误）: user={username}, ip={client_ip(request)}")
+        return HTMLResponse(_render_login("用户名或密码错误"), status_code=401)
 
     from src.infra.RbacService import rbac
 
-    if rbac.is_disabled(username):
-        return HTMLResponse(_render_login("账号已停用，请联系管理员"), status_code=403)
-    rbac.touch_user(username, "")
+    rbac.touch_user(username, _row.get("display_name") or "")
     request.session[SESSION_USER] = username
     request.session[SESSION_DISPLAY] = ""
     log.info(f"登录成功: user={username}")
     _init_sandbox_async(username)
     return RedirectResponse(nxt, status_code=302)
-
-
-@app.get(f"{PREFIX}/test-login")
-async def test_login_page():
-    return RedirectResponse(f"{PREFIX}/login", status_code=302)
-
-
-@app.post(f"{PREFIX}/test-login")
-async def test_login(request: Request):
-    """免密直登（脚本/冒烟测试用），需 `[app] test_login_enabled=true`"""
-    if not cfg.testLoginEnabled:
-        log.warning("test-login 被拒绝（配置未启用）")
-        return JSONResponse({"error": "测试登录功能未启用"}, status_code=403)
-
-    ct: str = request.headers.get("content-type") or ""
-    username: str = ""
-    if "application/json" in ct:
-        try:
-            username = str((await request.json() or {}).get("username", "")).strip()
-        except Exception:
-            username = ""
-    else:
-        form = await request.form()
-        username = str(form.get("username") or "").strip()
-    if not username:
-        return JSONResponse({"error": "用户名不能为空"}, status_code=400)
-    if not _valid_username(username):
-        return JSONResponse({"error": "用户名不合法"}, status_code=400)
-
-    from src.infra.RbacService import rbac
-
-    if rbac.is_disabled(username):
-        log.warning(f"停用账号尝试测试登录: user={username}")
-        return JSONResponse({"error": "账号已停用，请联系管理员"}, status_code=403)
-    rbac.touch_user(username, "")
-    request.session[SESSION_USER] = username
-    request.session[SESSION_DISPLAY] = ""
-    log.warning(f"【测试登录】免密登录成功: user={username}")
-    _init_sandbox_async(username)
-    return RedirectResponse(f"{PREFIX}/", status_code=302)
 
 
 @app.api_route(f"{PREFIX}/logout", methods=["GET", "POST"])

@@ -5,6 +5,7 @@ langgraph==1.1.6
 langgraph-checkpoint-postgres>=1.0.0,<3.0.0
 psycopg[binary]>=3.1            # PG 驱动；带 binary 才有预编译轮子，免装 libpq
 requests==2.32.3
+bcrypt>=4.2,<6      # 用户密码哈希（cost=12）
 redis==7.4.0
 pandas==2.2.3
 python-calamine==0.5.0
