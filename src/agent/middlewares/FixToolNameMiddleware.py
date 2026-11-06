@@ -78,11 +78,8 @@ class FixToolNameMiddleware(AgentMiddleware):
     2. 连续幻觉退化检测 — 超过阈值抛异常终止
     """
 
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler,
-    ) -> ToolMessage | Command:
+    def _before(self, request: ToolCallRequest) -> None:
+        """幻觉检测与修正（同步/异步共用；可能抛 HallucinationLoopError）"""
         tool_call = request.tool_call
         tool_name = tool_call.get("name", "")
         tool_call_id = tool_call.get("id", "")
@@ -91,7 +88,7 @@ class FixToolNameMiddleware(AgentMiddleware):
 
         if corrected_name is None:
             _reset_counter()
-            return handler(request)
+            return
 
         count = _inc_counter()
         log.warning(
@@ -103,4 +100,20 @@ class FixToolNameMiddleware(AgentMiddleware):
             raise HallucinationLoopError(tool_name, corrected_name, count)
 
         tool_call["name"] = corrected_name
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler,
+    ) -> ToolMessage | Command:
+        self._before(request)
         return handler(request)
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler,
+    ) -> ToolMessage | Command:
+        # astream 路径：基类没有 awrap_tool_call 的默认实现
+        self._before(request)
+        return await handler(request)

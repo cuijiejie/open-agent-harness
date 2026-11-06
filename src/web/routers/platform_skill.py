@@ -1,20 +1,16 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 """平台技能：全体用户共享的技能库
 
 存储：宿主 `<repo>/skills-platform/<条目>/`，每个条目是**不可变快照**
     office-file-toolkit/        第一次发布
     office-file-toolkit-v2/     同名再发布（不覆盖旧版）
-    office-file-toolkit-v3/     再发布
 
 关键语义（与用户确认过）：
     · 设为平台 **立即生效**，没有人工审核环节（仍跑与普通上传同一套硬性检查）
     · 同名再发布 = 新增一个版本条目，**不覆盖**原版本
-    · 添加到自己沙箱 = 复制一份，之后两份完全独立：
-        - 用户改/删自己那份，不影响平台
-        - 管理员删平台那份，已添加的用户照常能用
+    · 添加到自己沙箱 = 复制一份，之后两份完全独立
     · 删除权限：管理员可删全部；普通用户只能删**自己发布**的那条
-
-为什么放宿主不放沙箱：平台技能是全体共享的，不能挂在某个用户容器里；
-管理员上传/删除都是宿主文件操作，最快也最安全。
 """
 from __future__ import annotations
 
@@ -29,15 +25,13 @@ import time
 import uuid
 import zipfile
 
-from flask import Blueprint, Response, jsonify, request, send_file
+from fastapi import APIRouter, Body, Depends, File, UploadFile
+from fastapi.responses import JSONResponse, Response
 
 from src.agent.backends.sandbox import sandbox_manager
-from src.infra.utils.AuthUtil import login_required
 from src.infra.utils.LogUtil import log
 from src.infra.utils.SkillAudit import audit_skill_md, parse_skill_meta
-
-from .ChatController import _get_username
-from .SkillController import (
+from src.web.routers.skill import (
     ALLOWED_EXT,
     MAX_FILES,
     MAX_ZIP_BYTES,
@@ -48,17 +42,20 @@ from .SkillController import (
     _safe_name,
     scan_output_paths,
 )
+from src.web.security import require_login
 
-PlatformSkillController = Blueprint('PlatformSkillController', __name__)
+router: APIRouter = APIRouter()
 
-_REPO_ROOT: str = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REPO_ROOT: str = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 PLATFORM_DIR: str = os.path.join(_REPO_ROOT, "skills-platform")
 CACHE_KEY: str = "cache:platform:skills"
 CACHE_TTL: int = 600
 _VER_RE = re.compile(r"^(?P<base>.+?)-v(?P<v>\d+)$")
 
 
-# ---------------- 基础工具 ----------------
+# ============================================================
+# 基础工具
+# ============================================================
 
 def _base_of(name: str) -> str:
     """office-file-toolkit-v2 → office-file-toolkit"""
@@ -153,6 +150,10 @@ def _scan() -> list[dict]:
     return out
 
 
+def _scan_map() -> dict:
+    return {m.get("name"): m for m in _scan()}
+
+
 def _next_entry_name(base: str) -> str:
     """同名再发布 → <base>-v2 / -v3 …"""
     if not os.path.isdir(os.path.join(PLATFORM_DIR, base)):
@@ -199,15 +200,13 @@ def _pack_from_sandbox(username: str, skill: str) -> str | None:
         sandbox_manager.exec(username, f"rm -f {remote}", timeout=20)
 
 
-# ---------------- 接口 ----------------
+# ============================================================
+# 端点
+# ============================================================
 
-@PlatformSkillController.route('/api/platform-skills', methods=['GET'])
-@login_required
-def list_platform_skills() -> tuple[Response, int]:
+@router.get("/api/platform-skills")
+def list_platform_skills(username: str = Depends(require_login)):
     """平台技能列表（所有登录用户可见）"""
-    username: str = _get_username()
-    if not username:
-        return jsonify({'error': '未登录'}), 401
     cached = None
     try:
         from src.infra.utils import CacheUtil
@@ -231,22 +230,18 @@ def list_platform_skills() -> tuple[Response, int]:
         item["can_delete"] = bool(admin or (item.get("contributor") and
                                             item["contributor"] == username))
         out.append(item)
-    return jsonify({'skills': out, 'is_admin': admin}), 200
+    return JSONResponse({"skills": out, "is_admin": admin})
 
 
-@PlatformSkillController.route('/api/platform-skills/<name>/download', methods=['GET'])
-@login_required
-def download_platform_skill(name: str) -> Response | tuple[Response, int]:
+@router.get("/api/platform-skills/{name}/download")
+def download_platform_skill(name: str, username: str = Depends(require_login)):
     """下载平台技能为 .zip（与上传格式一致，改完可直接传回）"""
-    username: str = _get_username()
-    if not username:
-        return jsonify({'error': '未登录'}), 401
     try:
         d = _entry_dir(name)
     except ValueError:
-        return jsonify({'error': '技能名不合法'}), 400
+        return JSONResponse({"error": "技能名不合法"}, status_code=400)
     if not os.path.isdir(d):
-        return jsonify({'error': '技能不存在'}), 404
+        return JSONResponse({"error": "技能不存在"}, status_code=404)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -260,30 +255,28 @@ def download_platform_skill(name: str) -> Response | tuple[Response, int]:
                     zf.write(fp, arc)
                 except OSError:
                     continue
-    buf.seek(0)
     log.info(f"下载平台技能: user={username}, name={name}")
-    return send_file(buf, mimetype="application/zip", as_attachment=True,
-                     download_name=f"{name}.zip")
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{name}.zip"'},
+    )
 
 
-@PlatformSkillController.route('/api/platform-skills/<name>/add', methods=['POST'])
-@login_required
-def add_to_sandbox(name: str) -> tuple[Response, int]:
+@router.post("/api/platform-skills/{name}/add")
+def add_to_sandbox(name: str, payload: dict | None = Body(None),
+                   username: str = Depends(require_login)):
     """把平台技能复制一份到我的沙箱（之后两份独立）"""
-    username: str = _get_username()
-    if not username:
-        return jsonify({'error': '未登录'}), 401
     try:
         d = _entry_dir(name)
     except ValueError:
-        return jsonify({'error': '技能名不合法'}), 400
+        return JSONResponse({"error": "技能名不合法"}, status_code=400)
     if not os.path.isdir(d):
-        return jsonify({'error': '技能不存在'}), 404
+        return JSONResponse({"error": "技能不存在"}, status_code=404)
     if not sandbox_manager.enabled:
-        return jsonify({'error': '沙箱不可用'}), 503
+        return JSONResponse({"error": "沙箱不可用"}, status_code=503)
 
-    body = request.get_json(silent=True) or {}
-    overwrite: bool = bool(body.get("overwrite"))
+    overwrite: bool = bool((payload or {}).get("overwrite"))
     meta = _scan_map().get(name) or {}
     local: str = _safe_name(meta.get("base_name") or _base_of(name))
 
@@ -291,23 +284,23 @@ def add_to_sandbox(name: str) -> tuple[Response, int]:
         username, f"test -d {SKILLS_DIR}/{local} && echo yes || echo no", timeout=20)
     exists = "yes" in (chk.stdout or "")
     if exists and not overwrite:
-        return jsonify({'error': 'exists', 'local_name': local,
-                        'message': '你的沙箱里已有同名技能'}), 409
+        return JSONResponse({"error": "exists", "local_name": local,
+                             "message": "你的沙箱里已有同名技能"}, status_code=409)
     if exists:
         # 覆盖前把旧版归档到宿主（误覆盖可找回）
         if not _archive_out(username, local):
-            return jsonify({'error': '覆盖前备份旧技能失败，已中止'}), 500
+            return JSONResponse({"error": "覆盖前备份旧技能失败，已中止"}, status_code=500)
 
     tgz = _tgz_of_dir(d, local, exclude={"_platform.json"})
     remote = f"/sandbox/.tmp/.add-{uuid.uuid4().hex[:8]}.tgz"
     try:
         if not sandbox_manager.upload(username, tgz, remote):
-            return jsonify({'error': '上传到沙箱失败'}), 500
+            return JSONResponse({"error": "上传到沙箱失败"}, status_code=500)
         cmd = (f"mkdir -p {SKILLS_DIR} && tar -xzf {remote} -C {SKILLS_DIR} "
                f"&& rm -f {remote} && test -d {SKILLS_DIR}/{local} && echo ok")
         r = sandbox_manager.exec(username, cmd, timeout=90)
         if not (r.ok and "ok" in (r.stdout or "")):
-            return jsonify({'error': '解包失败: ' + (r.stderr or '')[:150]}), 500
+            return JSONResponse({"error": "解包失败: " + (r.stderr or "")[:150]}, status_code=500)
     finally:
         try:
             os.remove(tgz)
@@ -317,37 +310,28 @@ def add_to_sandbox(name: str) -> tuple[Response, int]:
     _evict(username, f"platform add {name}")
     _bust_skills_cache()
     log.info(f"平台技能已添加到沙箱: user={username}, platform={name}, local={local}")
-    return jsonify({'ok': True, 'local_name': local, 'overwritten': exists}), 200
+    return JSONResponse({"ok": True, "local_name": local, "overwritten": exists})
 
 
-def _scan_map() -> dict:
-    return {m.get("name"): m for m in _scan()}
-
-
-@PlatformSkillController.route('/api/platform-skills', methods=['POST'])
-@login_required
-def publish_skill() -> tuple[Response, int]:
+@router.post("/api/platform-skills")
+def publish_skill(payload: dict | None = Body(None), username: str = Depends(require_login)):
     """把我的技能设为平台技能（立即生效；同名 → 新增版本，不覆盖旧版）"""
-    username: str = _get_username()
-    if not username:
-        return jsonify({'error': '未登录'}), 401
     if not sandbox_manager.enabled:
-        return jsonify({'error': '沙箱不可用'}), 503
+        return JSONResponse({"error": "沙箱不可用"}, status_code=503)
 
-    body = request.get_json(silent=True) or {}
     try:
-        src: str = _safe_name(str(body.get("name") or ""))
+        src: str = _safe_name(str((payload or {}).get("name") or ""))
     except ValueError:
-        return jsonify({'error': '技能名不合法'}), 400
+        return JSONResponse({"error": "技能名不合法"}, status_code=400)
 
     chk = sandbox_manager.exec(
         username, f"test -d {SKILLS_DIR}/{src} && echo yes || echo no", timeout=20)
     if "yes" not in (chk.stdout or ""):
-        return jsonify({'error': '你的沙箱里没有这个技能'}), 404
+        return JSONResponse({"error": "你的沙箱里没有这个技能"}, status_code=404)
 
     tgz = _pack_from_sandbox(username, src)
     if not tgz:
-        return jsonify({'error': '打包技能失败'}), 500
+        return JSONResponse({"error": "打包技能失败"}, status_code=500)
     try:
         # 硬性内容检查（与普通上传同一套规则，不通过就不放行）
         content = ""
@@ -358,11 +342,11 @@ def publish_skill() -> tuple[Response, int]:
             except KeyError:
                 content = ""
         if not content:
-            return jsonify({'error': '技能缺少 SKILL.md'}), 400
+            return JSONResponse({"error": "技能缺少 SKILL.md"}, status_code=400)
         passed, blocked, warned = audit_skill_md(content)
         if not passed:
             log.warning(f"平台技能发布被拦: user={username}, name={src}, 命中={blocked}")
-            return jsonify({'error': '技能内容检查未通过: ' + '；'.join(blocked)}), 400
+            return JSONResponse({"error": "技能内容检查未通过: " + "；".join(blocked)}, status_code=400)
 
         base = _base_of(src)
         entry = _next_entry_name(base)
@@ -386,8 +370,8 @@ def publish_skill() -> tuple[Response, int]:
             json.dump(meta, fh, ensure_ascii=False, indent=2)
         _bust()
         log.info(f"平台技能已发布: user={username}, entry={entry}, {meta.get('size')} 字节")
-        return jsonify({'ok': True, 'name': entry, 'base_name': base,
-                        'version': meta["version"], 'warnings': warned[:5]}), 200
+        return JSONResponse({"ok": True, "name": entry, "base_name": base,
+                             "version": meta["version"], "warnings": warned[:5]})
     finally:
         try:
             os.remove(tgz)
@@ -395,31 +379,26 @@ def publish_skill() -> tuple[Response, int]:
             pass
 
 
-@PlatformSkillController.route('/api/platform-skills/upload', methods=['POST'])
-@login_required
-def upload_platform_skill() -> tuple[Response, int]:
+@router.post("/api/platform-skills/upload")
+def upload_platform_skill(file: UploadFile = File(...), username: str = Depends(require_login)):
     """管理员直接把 zip 技能包传上平台"""
-    username: str = _get_username()
-    if not username:
-        return jsonify({'error': '未登录'}), 401
     if not _is_admin(username):
-        return jsonify({'error': '只有管理员可以直接上传平台技能'}), 403
-    if 'file' not in request.files:
-        return jsonify({'error': '请选择 .zip 技能包'}), 400
-    f = request.files['file']
-    if not f or not f.filename:
-        return jsonify({'error': '文件为空'}), 400
-    if not f.filename.lower().endswith('.zip'):
-        return jsonify({'error': '只接受 .zip（技能包内需含 SKILL.md）'}), 400
+        return JSONResponse({"error": "只有管理员可以直接上传平台技能"}, status_code=403)
+    if not file or not file.filename:
+        return JSONResponse({"error": "文件为空"}, status_code=400)
+    if not file.filename.lower().endswith(".zip"):
+        return JSONResponse({"error": "只接受 .zip（技能包内需含 SKILL.md）"}, status_code=400)
 
     tmp_root = tempfile.mkdtemp(prefix="pa_plat_up_")
     try:
         zip_path = os.path.join(tmp_root, "pkg.zip")
-        f.save(zip_path)
+        with open(zip_path, "wb") as out:
+            shutil.copyfileobj(file.file, out)
         if os.path.getsize(zip_path) <= 0:
-            return jsonify({'error': '文件为空'}), 400
+            return JSONResponse({"error": "文件为空"}, status_code=400)
         if os.path.getsize(zip_path) > MAX_ZIP_BYTES:
-            return jsonify({'error': f'技能包过大（上限 {MAX_ZIP_BYTES // 1024 // 1024}MB）'}), 400
+            return JSONResponse({"error": f"技能包过大（上限 {MAX_ZIP_BYTES // 1024 // 1024}MB）"},
+                                status_code=400)
 
         extract_dir = os.path.join(tmp_root, "pkg")
         os.makedirs(extract_dir, exist_ok=True)
@@ -428,16 +407,17 @@ def upload_platform_skill() -> tuple[Response, int]:
             for info in zf.infolist():
                 nm = info.filename.replace("\\", "/")
                 if nm.startswith("/") or ".." in nm.split("/"):
-                    return jsonify({'error': f'技能包内含非法路径: {nm}'}), 400
+                    return JSONResponse({"error": f"技能包内含非法路径: {nm}"}, status_code=400)
                 if info.is_dir():
                     continue
                 ext = os.path.splitext(nm)[1].lower()
                 if ext not in ALLOWED_EXT:
-                    return jsonify({'error': f'不允许的文件类型: {nm}'}), 400
+                    return JSONResponse({"error": f"不允许的文件类型: {nm}"}, status_code=400)
                 count += 1
                 total += info.file_size
                 if count > MAX_FILES or total > MAX_ZIP_BYTES:
-                    return jsonify({'error': f'技能包文件过多或解压后过大（>{MAX_FILES} 个）'}), 400
+                    return JSONResponse({"error": f"技能包文件过多或解压后过大（>{MAX_FILES} 个）"},
+                                        status_code=400)
             zf.extractall(extract_dir)
 
         root = None
@@ -446,18 +426,18 @@ def upload_platform_skill() -> tuple[Response, int]:
                 root = dp
                 break
         if not root:
-            return jsonify({'error': '技能包里没有 SKILL.md'}), 400
+            return JSONResponse({"error": "技能包里没有 SKILL.md"}, status_code=400)
 
         content = open(os.path.join(root, "SKILL.md"), encoding="utf-8", errors="replace").read()
         passed, blocked, warned = audit_skill_md(content)
         if not passed:
-            return jsonify({'error': '技能内容检查未通过: ' + '；'.join(blocked)}), 400
+            return JSONResponse({"error": "技能内容检查未通过: " + "；".join(blocked)}, status_code=400)
 
         meta_in = parse_skill_meta(content, fallback_name=os.path.basename(root) or "platform-skill")
         try:
             base = _base_of(_safe_name(str(meta_in.get("name") or os.path.basename(root))))
         except ValueError:
-            return jsonify({'error': '技能名不合法（frontmatter 的 name）'}), 400
+            return JSONResponse({"error": "技能名不合法（frontmatter 的 name）"}, status_code=400)
 
         entry = _next_entry_name(base)
         target = os.path.join(PLATFORM_DIR, entry)
@@ -474,24 +454,20 @@ def upload_platform_skill() -> tuple[Response, int]:
             json.dump(meta, fh, ensure_ascii=False, indent=2)
         _bust()
         log.info(f"平台技能已上传: admin={username}, entry={entry}")
-        return jsonify({'ok': True, 'name': entry, 'version': meta["version"]}), 200
+        return JSONResponse({"ok": True, "name": entry, "version": meta["version"]})
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
 
 
-@PlatformSkillController.route('/api/platform-skills/<name>', methods=['DELETE'])
-@login_required
-def delete_platform_skill(name: str) -> tuple[Response, int]:
+@router.delete("/api/platform-skills/{name}")
+def delete_platform_skill(name: str, username: str = Depends(require_login)):
     """删除平台技能：管理员可删全部，普通用户只能删自己发布的"""
-    username: str = _get_username()
-    if not username:
-        return jsonify({'error': '未登录'}), 401
     try:
         d = _entry_dir(name)
     except ValueError:
-        return jsonify({'error': '技能名不合法'}), 400
+        return JSONResponse({"error": "技能名不合法"}, status_code=400)
     if not os.path.isdir(d):
-        return jsonify({'error': '技能不存在'}), 404
+        return JSONResponse({"error": "技能不存在"}, status_code=404)
 
     contributor = ""
     mp = os.path.join(d, "_platform.json")
@@ -502,9 +478,9 @@ def delete_platform_skill(name: str) -> tuple[Response, int]:
             contributor = ""
 
     if not (_is_admin(username) or (contributor and contributor == username)):
-        return jsonify({'error': '只能删除自己发布的平台技能'}), 403
+        return JSONResponse({"error": "只能删除自己发布的平台技能"}, status_code=403)
 
     shutil.rmtree(d, ignore_errors=False)
     _bust()
     log.warning(f"平台技能已删除: by={username}, entry={name}, contributor={contributor}")
-    return jsonify({'ok': True, 'name': name}), 200
+    return JSONResponse({"ok": True, "name": name})

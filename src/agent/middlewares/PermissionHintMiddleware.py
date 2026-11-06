@@ -4,7 +4,7 @@
 最后才说"我没有这个接口"。
 
 做法：装配 agent 时算出「本用户不可用的写操作清单」，在每次调用模型前
-追加到系统提示末尾。模型看到"你当前没有写入类工具的权限"这一行，
+追加到系统提示末尾。模型看到"你当前没有新建衍生产品的权限"这一行，
 就不会再去引导用户填参数。
 
 失败不影响主流程（try/except 吞掉，最多是提示不出现）。
@@ -41,6 +41,15 @@ class PermissionHintMiddleware(AgentMiddleware):
         except Exception as e:
             log.debug(f"权限提示注入失败（忽略）: {e}")
         return handler(request)
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        if not self._hint:
+            return await handler(request)
+        try:
+            _append_to_system(request, self._hint)
+        except Exception as e:
+            log.debug(f"权限提示注入失败（忽略）: {e}")
+        return await handler(request)
 
     # ------------------------------------------------------------------
     # 兜底：万一 wrap_model_call 的 request 结构变了，走 before_model
