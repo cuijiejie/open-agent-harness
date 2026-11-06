@@ -118,7 +118,6 @@
             <div class="user-name">{{ userLabel }}</div>
             <div class="user-sub" v-if="userRoleLabel && userRoleLabel !== userLabel">{{ userRoleLabel }}</div>
           </div>
-          <button type="button" class="user-exit" title="退出登录" @click.stop="doLogout">退出登录</button>
         </div>
         </div>
       </aside>
@@ -745,6 +744,10 @@
     <!-- 个人设置：偏好 / 业务知识 / 修改密码（和系统设置一样用页面，不弹框） -->
     <div v-if="activeTab === 'me'" class="tab-pane">
       <div class="me-wrap">
+        <div class="me-head">
+          <div class="me-title">个人设置</div>
+          <button type="button" class="me-logout" @click="doLogout">退出登录</button>
+        </div>
         <div class="prefs-head">
           <div class="prefs-tabs">
             <button type="button" :class="['prefs-tab', { on: meTab === 'prefs' }]" @click="openMeTab('prefs')">偏好</button>
@@ -3700,35 +3703,36 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 .user-bar {
   margin-top: auto;
   border-top: 1px solid rgba(148, 163, 184, .22);
-  padding: 8px 6px 10px;
+  padding: 8px;
 }
 .user-card {
   display: flex; align-items: center; gap: 10px;
-  padding: 7px 8px; border-radius: 10px;
-  transition: background .15s ease;
+  padding: 6px 8px; border-radius: 8px;
+  cursor: pointer; transition: background .15s ease;
 }
 .user-card:hover { background: #eef2f9; }
-/* 头像 + 名字整块可点 → 打开「个人设置」页 */
-.user-avatar, .user-meta { cursor: pointer; }
 .user-card:hover .user-name { color: #4F46E5; }
-/* 退出登录：安静的文字按钮，平时不抢眼，hover 才提示危险色 */
-.user-exit {
-  flex: 0 0 auto; padding: 4px 6px; border: none; background: none;
-  border-radius: 6px; cursor: pointer;
-  font-size: 12.5px; color: #94a3b8; line-height: 1.2;
-  transition: color .15s ease, background .15s ease;
-}
-.user-exit:hover { color: #dc2626; background: #fee2e2; }
 
 /* ===== 个人设置页（偏好 / 业务知识 / 修改密码）===== */
 .me-wrap { max-width: 720px; padding: 18px 22px 26px; }
+.me-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+.me-title { font-size: 15px; font-weight: 600; color: #1e293b; }
+.me-logout {
+  padding: 5px 10px; border: none; border-radius: 7px; cursor: pointer;
+  font-size: 13px; color: #94a3b8; background: none;
+  transition: color .15s ease, background .15s ease;
+}
+.me-logout:hover { color: #dc2626; background: #fee2e2; }
 .me-form { display: flex; flex-direction: column; max-width: 360px; }
 .me-label { font-size: 13px; color: #334155; margin: 14px 0 6px; }
 .me-label:first-child { margin-top: 4px; }
 .me-hint { font-size: 12px; color: #94a3b8; margin-left: 6px; }
 .me-save { margin-top: 20px; align-self: flex-start; padding: 9px 22px; }
 .user-avatar {
-  width: 36px; height: 36px; flex: 0 0 auto; border-radius: 50%;
+  width: 34px; height: 34px; flex: 0 0 auto; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   font-size: 16px; font-weight: 700; color: #fff;
   background: #eef2ff; border: 1px solid #e2e8f5; overflow: hidden;
