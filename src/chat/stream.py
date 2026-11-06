@@ -26,7 +26,7 @@ import urllib.request
 import urllib.error
 from typing import Any, AsyncGenerator, Generator
 
-from src.infra.db.async_database import session_scope
+from src.infra.db.database import session_scope
 
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
@@ -34,7 +34,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from src.agent.middlewares.FixToolNameMiddleware import HallucinationLoopError
 from src.infra.utils.LogUtil import log
-from src.infra.dao.async_dao import MessageDao, SessionDao
+from src.infra.dao import MessageDao, SessionDao
 from src.agent.main_agent import create_agent
 from config.Configs import cfg
 
@@ -59,7 +59,7 @@ def _spawn_post_turn(agent: CompiledStateGraph, config: dict[str, Any],
     """
 
     async def _run() -> None:
-        from src.infra.db.async_database import session_scope
+        from src.infra.db.database import session_scope
 
         try:
             # 请求级 session 在响应结束时会被中间件关掉，这里用独立 session

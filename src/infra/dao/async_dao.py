@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy import desc, func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from src.infra.db.async_database import get_db
+from src.infra.db.database import get_db
 from src.infra.model.MessageModel import ChatMessage
 from src.infra.model.SessionModel import ChatSession
 from src.infra.utils.LogUtil import log

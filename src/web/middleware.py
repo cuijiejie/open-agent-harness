@@ -15,7 +15,7 @@ import uuid
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from src.infra.db.async_database import close_request_session, open_request_session
+from src.infra.db.database import close_request_session, open_request_session
 from src.infra.utils.LogUtil import log
 
 MAX_BODY_BYTES: int = 100 * 1024 * 1024 + 8 * 1024 * 1024   # 100MB + multipart 余量

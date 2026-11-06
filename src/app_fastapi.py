@@ -261,11 +261,11 @@ async def logout(request: Request):
 def _init_sandbox_async(username: str) -> None:
     """登录后预热沙箱（失败不影响登录）
 
-    P0 复用 Flask 侧的实现；P1 把它搬到 `src/web/`，避免这里 import AuthUtil 时带出 flask。
+    直接调 sandbox 的后台初始化（与 `/api/warm` 同一入口），不再依赖已删除的 AuthUtil。
     """
     try:
-        from src.infra.utils.AuthUtil import _init_sandbox
+        from src.agent.backends.sandbox import init_user_sandbox_async
 
-        _init_sandbox(username)
+        init_user_sandbox_async(username)
     except Exception as e:
         log.warning(f"沙箱预热失败（忽略）: user={username}, err={e}")

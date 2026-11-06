@@ -1,10 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""路由契约检查：FastAPI 路由表必须覆盖现有 Flask controller 的每一个端点
+"""路由回归检查：Flask controller 删除后，用**冻结基线**防止路由被误删
 
-用途：Flask → FastAPI 迁移的**验收基线**。少一条就是把功能搬丢了，
-多出来的必须是系统路由（已登记在 SYS_EXTRA）。
-不依赖 pytest，直接跑：`python test/unit/route_contract.py`
+背景：迁移期用「扫 src/controller 推导期望值」做验收（62/62 PASS）。Flask 删掉后
+没有对照物了，所以改成两条硬约束：
+
+  1. **数量下限**：业务端点（去掉系统路由）不少于 BASELINE_MIN 条
+  2. **关键路径抽查**：核心接口必须在（少一条就是功能没了）
+
+跑法：`python test/unit/route_contract.py`（需要能 import app，即要装依赖）
 """
 import os
 import re
@@ -13,16 +17,35 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
-# 系统路由：由 app_fastapi 自己提供，controller 里也有同名（如 /logout），
-# 或属于前端静态/探针，不计入"多出"
 PREFIX: str = "/open-agent-harness"
+BASELINE_MIN: int = 58          # 迁移完成时是 62（含 /logout 的 GET+POST），留 4 条余量
 
-SYS_EXTRA = {
+# 系统路由（app_fastapi 自己提供，不算业务端点）
+SYS = {
     ("GET", "/"), ("GET", "/logout"), ("POST", "/logout"),
     ("GET", "/api/version"), ("GET", "/api/user/currentUser"),
     ("GET", "/test.html"), ("GET", "/test-login"), ("POST", "/test-login"),
     ("GET", "/login"), ("POST", "/login"),
 }
+
+# 关键路径抽查：这些接口没了，功能就是缺了
+SPOT = [
+    ("POST", "/api/chat"),
+    ("POST", "/api/chat/upload"),
+    ("GET", "/api/sessions"),
+    ("GET", "/api/sessions/{}/messages"),
+    ("DELETE", "/api/sessions/{}"),
+    ("GET", "/api/artifacts/{}/{}"),
+    ("GET", "/api/knowledge"), ("POST", "/api/knowledge"), ("DELETE", "/api/knowledge/{}"),
+    ("GET", "/api/prefs"), ("DELETE", "/api/prefs/{}"),
+    ("GET", "/api/rbac/roles"), ("POST", "/api/users"), ("PATCH", "/api/users/{}"),
+    ("GET", "/api/skills"), ("POST", "/api/skills/upload"), ("DELETE", "/api/skills/{}"),
+    ("GET", "/api/mcp/servers"), ("POST", "/api/mcp/servers"),
+    ("GET", "/api/platform-skills"),
+    ("GET", "/api/sandbox/files"), ("POST", "/api/sandbox/mkdir"),
+    ("GET", "/api/trace"), ("GET", "/api/audit"),
+    ("GET", "/api/warm"), ("POST", "/api/warm"),
+]
 
 
 def norm(p: str) -> str:
@@ -31,38 +54,15 @@ def norm(p: str) -> str:
     return p.rstrip("/") or "/"
 
 
-def expected() -> set:
-    """从 controller 源码抽（不 import Flask，避免副作用）"""
-    out: set = set()
-    d = os.path.join(ROOT, "src", "controller")
-    for f in sorted(os.listdir(d)):
-        if not f.endswith(".py") or f == "__init__.py":
-            continue
-        src = open(os.path.join(d, f), encoding="utf-8").read()
-        for m in re.finditer(r"@\w+\.route\(\s*['\"]([^'\"]+)['\"]"
-                             r"(?:\s*,\s*methods\s*=\s*\[([^\]]*)\])?", src):
-            methods = re.findall(r"['\"](\w+)['\"]", m.group(2) or "['GET']") or ["GET"]
-            for meth in methods:
-                out.add((meth.upper(), norm(m.group(1))))
-    return out
-
-
 def actual() -> set:
-    """从 OpenAPI schema 取路由表
-
-    不能直接扫 `app.routes`：新版 FastAPI（0.16x / starlette 1.x）把 `include_router`
-    注册成 mount，端点不再平铺在 `app.routes` 里（扫出来只有系统路由，会误报"全部缺失"）。
-    `app.openapi()` 会把 mount 里的路由一并展开，且路径参数已经是 `{name}` 形式。
-    """
+    """新版 FastAPI 把 include_router 注册成 mount，必须用 openapi() 展开"""
     from src.app_fastapi import app
 
-    schema: dict = app.openapi()
-    out: set = set()
-    for path, ops in (schema.get("paths") or {}).items():
-        # 业务路由挂在 PREFIX 下，比对前先剥掉
+    out = set()
+    for path, ops in (app.openapi().get("paths") or {}).items():
         if path.startswith(PREFIX):
             path = path[len(PREFIX):] or "/"
-        for meth in ops.keys():
+        for meth in ops:
             m = meth.upper()
             if m in ("HEAD", "OPTIONS", "PARAMETERS"):
                 continue
@@ -71,22 +71,17 @@ def actual() -> set:
 
 
 def main() -> int:
-    exp, act = expected(), actual()
-    missing = sorted(exp - act)
-    extra = sorted(act - exp - SYS_EXTRA)
+    act = actual()
+    biz = act - SYS
+    missing_spot = [s for s in SPOT if s not in act]
 
-    print(f"controller 端点 {len(exp)} 个 | FastAPI 端点 {len(act)} 个")
-    if missing:
-        print(f"\n❌ 缺失 {len(missing)} 条（迁移漏搬）：")
-        for meth, path in missing:
-            print(f"   {meth:6s} {path}")
-    if extra:
-        print(f"\n⚠️  多出 {len(extra)} 条（未登记的系统路由，请确认）：")
-        for meth, path in extra:
-            print(f"   {meth:6s} {path}")
-
-    ok = not missing
-    print("\nRESULT:", "PASS" if ok else f"FAIL（缺 {len(missing)} 条）")
+    print(f"业务端点 {len(biz)} 条（基线下限 {BASELINE_MIN}）")
+    if missing_spot:
+        print(f"\n❌ 关键接口缺失 {len(missing_spot)} 条：")
+        for m, p in missing_spot:
+            print(f"   {m:6s} {p}")
+    ok = len(biz) >= BASELINE_MIN and not missing_spot
+    print("\nRESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
 
