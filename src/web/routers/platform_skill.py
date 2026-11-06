@@ -355,7 +355,12 @@ def publish_skill(payload: dict | None = Body(None), username: str = Depends(req
         tmp_dir = tempfile.mkdtemp(prefix="pa_plat_")
         try:
             with tarfile.open(tgz, "r:gz") as tf:
-                tf.extractall(tmp_dir)
+                try:
+                    # 用户在沙箱里可以造符号链接；解包必须以 data 过滤器落盘，
+                    # 否则 symlink/硬链接可以把文件写到 PLATFORM_DIR 之外（进程是 root）
+                    tf.extractall(tmp_dir, filter="data")
+                except TypeError:      # Python < 3.12 没有 filter 参数
+                    tf.extractall(tmp_dir)
             shutil.move(os.path.join(tmp_dir, src), target)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)

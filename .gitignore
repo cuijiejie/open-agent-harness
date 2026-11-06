@@ -64,3 +64,4 @@ auth.json
 
 # ---- 运行时产物 ----
 frontend/dist/
+docs/测试与压测报告-2026-11-06.md

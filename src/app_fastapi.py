@@ -189,6 +189,8 @@ def _valid_username(username: str) -> bool:
         return False
     if "/" in u or "\\" in u or ".." in u:
         return False
+    if any(ch in u for ch in '<>"'):
+        return False
     return not any(ord(ch) < 32 for ch in u)
 
 

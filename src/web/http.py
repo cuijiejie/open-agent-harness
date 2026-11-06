@@ -34,12 +34,16 @@ SSE_HEADERS: dict[str, str] = {
 def client_ip(request: Request) -> str:
     """客户端 IP（替代 Flask 的 request.remote_addr）
 
-    反向代理后真实 IP 在 X-Forwarded-For 里；只取第一段，缺失则回落直连地址。
+    只有**直连方是本机/回环**（即前面确实有一层本机反向代理）时才信任
+    X-Forwarded-For；否则一律用 TCP 对端地址。无条件信任 XFF 会让任何人
+    伪造头绕过登录限速/审计（`X-Forwarded-For: 1.2.3.4` 每次换一个）。
     """
-    fwd: str = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return getattr(request.client, "host", "") or "-"
+    peer: str = getattr(request.client, "host", "") or "-"
+    if peer in ("127.0.0.1", "::1", "localhost"):
+        fwd: str = request.headers.get("x-forwarded-for", "")
+        if fwd:
+            return fwd.split(",")[0].strip() or peer
+    return peer
 
 
 def wants_attachment(request: Request) -> bool:
