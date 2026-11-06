@@ -162,31 +162,24 @@
 
         <!-- 左下角：当前登录用户（参考样式：头像 + 姓名/角色 + 右侧圆形操作按钮） -->
         <div class="user-card">
-          <div class="user-avatar" :title="displayName || username">
+          <div class="user-avatar user-trigger" :title="userLabel" @click.stop="toggleUserMenu">
             <img class="user-avatar-img" :src="avatarSrc" alt="默认头像"
                  @error="avatarFailed = true" v-if="!avatarFailed" />
             <span v-else>{{ userInitial || 'U' }}</span>
           </div>
-          <div class="user-meta">
-            <div class="user-name" :title="`${displayName}（${username}）`">{{ displayName || username }}</div>
-            <div class="user-sub">
-              <span>{{ username }}</span>
-              <template v-if="meRoleLabels"><span class="user-dot">·</span><span>{{ meRoleLabels }}</span></template>
+          <div class="user-meta user-trigger" :title="username" @click.stop="toggleUserMenu">
+            <div class="user-name">{{ userLabel }}</div>
+            <div class="user-sub" v-if="userRoleLabel && userRoleLabel !== userLabel">
+              <span>{{ userRoleLabel }}</span>
             </div>
           </div>
-          <button type="button" class="user-action" title="修改密码" @click="openChangePwd">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 2l-2 2m-7.6 7.6a5 5 0 1 1-7.1 7.1 5 5 0 0 1 7.1-7.1z"/>
-              <path d="M15.5 7.5l3 3L22 7l-3-3"/>
-            </svg>
-          </button>
-          <button type="button" class="user-action" title="我的偏好" @click="openPrefs">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>
-            </svg>
-          </button>
+          <!-- 点头像/名字弹出：修改密码 / 偏好 -->
+          <transition name="modal-fade">
+            <div v-if="userMenuOpen" class="user-menu" @click.stop>
+              <button type="button" class="user-menu-item" @click="pickUserMenu('password')">修改密码</button>
+              <button type="button" class="user-menu-item" @click="pickUserMenu('prefs')">偏好设置</button>
+            </div>
+          </transition>
           <button type="button" class="user-action" title="退出登录" @click="doLogout">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1323,6 +1316,24 @@ const meRoleLabels = computed(() => {
   const names = meRoles.value.map((c) => roleName(c) || c)
   return names.join('、')
 })
+// ===== 左下角用户菜单（点头像/名字弹出）=====
+const userMenuOpen = ref(false)
+const toggleUserMenu = () => { userMenuOpen.value = !userMenuOpen.value }
+const closeUserMenu = () => { userMenuOpen.value = false }
+const pickUserMenu = (what) => {
+  userMenuOpen.value = false
+  if (what === 'password') openChangePwd()
+  else openPrefs()
+}
+// 显示名：有中文名就只显示中文名；没有中文名（纯拼音/英文/等于账号）就显示账号
+const userLabel = computed(() => {
+  const dn = String(displayName.value || '').trim()
+  const un = String(username.value || '').trim()
+  if (!dn || dn === un) return un
+  return /[\u4e00-\u9fa5]/.test(dn) ? dn : un
+})
+const userRoleLabel = computed(() => String(meRoleLabels.value || '').trim())
+
 // 默认头像：姓名/账号首字 + 按账号哈希固定的渐变底色（同一个人每次登录颜色一致）
 const AVATAR_GRADIENTS = [
   ['#6366F1', '#4338CA'],
@@ -2859,6 +2870,8 @@ const generateSessionId = () => {
 }
 const username = ref(config.username)
 const displayName = ref(config.displayName || config.username)
+onMounted(() => { document.addEventListener('click', closeUserMenu) })
+onBeforeUnmount(() => { document.removeEventListener('click', closeUserMenu) })
 const sessionId = ref(config.sessionId || generateSessionId())
 
 // 切到「轨迹」标签或切换会话时自动拉取（必须放在 sessionId 定义之后）
@@ -3683,10 +3696,27 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 }
 /* ===== 左下角用户信息（头像 + 姓名/角色 + 圆形操作按钮） ===== */
 .user-card {
+  position: relative;
   margin-top: auto;
   display: flex; align-items: center; gap: 10px;
   padding: 12px 10px 14px; border-top: 1px solid rgba(148, 163, 184, .22);
 }
+/* 头像和名字整块可点，点击弹出菜单 */
+.user-trigger { cursor: pointer; }
+.user-trigger:hover .user-name { color: #4F46E5; }
+/* 用户菜单：贴在卡片上方 */
+.user-menu {
+  position: absolute; left: 10px; right: 10px; bottom: 64px;
+  padding: 6px; z-index: 40; background: #fff;
+  border: 1px solid #e5e9f2; border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, .16);
+}
+.user-menu-item {
+  display: block; width: 100%; padding: 9px 12px; text-align: left;
+  font-size: 13px; color: #334155; background: none; border: none;
+  border-radius: 8px; cursor: pointer; transition: background .15s ease, color .15s ease;
+}
+.user-menu-item:hover { background: #EEF2FF; color: #4F46E5; }
 .user-avatar {
   width: 40px; height: 40px; flex: 0 0 auto; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
