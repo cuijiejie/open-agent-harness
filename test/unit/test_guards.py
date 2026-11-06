@@ -149,30 +149,38 @@ class TestHasPendingInterrupt(unittest.TestCase):
             self.next = next_
 
     class _Agent:
+        """假 agent：_has_pending_interrupt 异步化后走 `aget_state`"""
+
         def __init__(self, next_=(), boom=False):
             self._next = next_
             self._boom = boom
 
-        def get_state(self, _cfg):
+        async def aget_state(self, _cfg):
             if self._boom:
                 raise RuntimeError("checkpointer down")
             return TestHasPendingInterrupt._Snap(self._next)
 
     def test_pending(self):
+        import asyncio
+
         from src.chat.stream import _has_pending_interrupt
 
-        self.assertTrue(_has_pending_interrupt(self._Agent(("model",)), {}))
+        self.assertTrue(asyncio.run(_has_pending_interrupt(self._Agent(("model",)), {})))
 
     def test_finished(self):
+        import asyncio
+
         from src.chat.stream import _has_pending_interrupt
 
-        self.assertFalse(_has_pending_interrupt(self._Agent(()), {}))
+        self.assertFalse(asyncio.run(_has_pending_interrupt(self._Agent(()), {})))
 
     def test_query_failure_allows(self):
         """查询失败要放行：宁可多跑一次，也别把正常恢复挡死"""
+        import asyncio
+
         from src.chat.stream import _has_pending_interrupt
 
-        self.assertTrue(_has_pending_interrupt(self._Agent(boom=True), {}))
+        self.assertTrue(asyncio.run(_has_pending_interrupt(self._Agent(boom=True), {})))
 
 
 class TestAuditMask(unittest.TestCase):
