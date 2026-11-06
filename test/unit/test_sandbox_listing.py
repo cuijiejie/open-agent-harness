@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 class TestParseEntries(unittest.TestCase):
     def _parse(self, text: str, cur="/sandbox"):
-        from src.controller.SandboxController import _parse_entries
+        from src.web.routers.sandbox import _parse_entries
 
         return _parse_entries(text, cur)
 
@@ -77,7 +77,7 @@ class TestParseEntries(unittest.TestCase):
 class TestEntriesCmd(unittest.TestCase):
     def test_single_command_contains_both_parts(self):
         """必须是一条命令里同时列目录和文件（合并的意义就在这）"""
-        from src.controller.SandboxController import _entries_cmd
+        from src.web.routers.sandbox import _entries_cmd
 
         cmd = _entries_cmd("/sandbox")
         self.assertIn("for d in */", cmd, "要列子目录")
@@ -86,7 +86,7 @@ class TestEntriesCmd(unittest.TestCase):
         self.assertEqual(cmd.count("; find . -maxdepth 1"), 1)
 
     def test_path_quoting(self):
-        from src.controller.SandboxController import _entries_cmd
+        from src.web.routers.sandbox import _entries_cmd
 
         cmd = _entries_cmd("/sandbox/a'b")
         self.assertIn("'/sandbox/a'\\''b'", cmd, "含单引号的路径要转义")
@@ -96,7 +96,7 @@ class TestDeleteHelpers(unittest.TestCase):
     """删除/批量删除合并成一次 exec 后的命令与解析"""
 
     def test_delete_cmd_has_all_phases(self):
-        from src.controller.SandboxController import _delete_cmd
+        from src.web.routers.sandbox import _delete_cmd
 
         cmd = _delete_cmd("/sandbox/a.txt", force=False)
         for mark in ("KIND=none", "KIND=file", "KIND=dir", "RESULT=need_confirm",
@@ -105,24 +105,24 @@ class TestDeleteHelpers(unittest.TestCase):
         self.assertIn("rm -f", cmd)
 
     def test_delete_cmd_force_skips_confirm(self):
-        from src.controller.SandboxController import _delete_cmd
+        from src.web.routers.sandbox import _delete_cmd
 
         self.assertNotIn("need_confirm", _delete_cmd("/sandbox/d", force=True))
 
     def test_delete_cmd_quotes_path(self):
-        from src.controller.SandboxController import _delete_cmd
+        from src.web.routers.sandbox import _delete_cmd
 
         self.assertIn("'/sandbox/a'\\''b'", _delete_cmd("/sandbox/a'b", force=False))
 
     def test_parse_kv(self):
-        from src.controller.SandboxController import _parse_kv
+        from src.web.routers.sandbox import _parse_kv
 
         out = "KIND=dir\nCOUNT=3\nRESULT=deleted\n\nnoise\n"
         self.assertEqual(_parse_kv(out), {"KIND": "dir", "COUNT": "3", "RESULT": "deleted"})
         self.assertEqual(_parse_kv(""), {})
 
     def test_batch_cmd_lists_every_path(self):
-        from src.controller.SandboxController import _batch_delete_cmd
+        from src.web.routers.sandbox import _batch_delete_cmd
 
         cmd = _batch_delete_cmd(["/sandbox/a.txt", "/sandbox/b c.txt"])
         self.assertIn("'/sandbox/a.txt'", cmd)
@@ -132,7 +132,7 @@ class TestDeleteHelpers(unittest.TestCase):
         self.assertIn("OK", cmd)
 
     def test_parse_batch(self):
-        from src.controller.SandboxController import _parse_batch
+        from src.web.routers.sandbox import _parse_batch
 
         out = "OK\t/sandbox/a.txt\nMISS\t/sandbox/b.txt\nFAIL\t/sandbox/c.txt\n"
         deleted, failed = _parse_batch(out)
@@ -142,7 +142,7 @@ class TestDeleteHelpers(unittest.TestCase):
         self.assertIn("未生效", failed[1]["reason"])
 
     def test_parse_batch_ignores_garbage(self):
-        from src.controller.SandboxController import _parse_batch
+        from src.web.routers.sandbox import _parse_batch
 
         deleted, failed = _parse_batch("noise\n\nOK\n")
         self.assertEqual((deleted, failed), ([], []))
@@ -152,7 +152,7 @@ class TestOpHelpers(unittest.TestCase):
     """移动/复制合并成一次 exec 后的命令与解析"""
 
     def test_move_cmd_reports_conflict(self):
-        from src.controller.SandboxController import _op_cmd
+        from src.web.routers.sandbox import _op_cmd
 
         cmd = _op_cmd("/sandbox/dest", ["/sandbox/a"], copy=False)
         self.assertIn("NODEST", cmd, "目标不存在时要有明确标记")
@@ -161,7 +161,7 @@ class TestOpHelpers(unittest.TestCase):
         self.assertIn("'/sandbox/a'", cmd)
 
     def test_copy_cmd_auto_suffix(self):
-        from src.controller.SandboxController import _op_cmd
+        from src.web.routers.sandbox import _op_cmd
 
         cmd = _op_cmd("/sandbox/dest", ["/sandbox/a.txt"], copy=True)
         self.assertIn("cp -r", cmd)
@@ -172,14 +172,14 @@ class TestOpHelpers(unittest.TestCase):
         self.assertNotIn('cp -r "$s" "$d/$t"', cmd)
 
     def test_op_cmd_lists_every_source(self):
-        from src.controller.SandboxController import _op_cmd
+        from src.web.routers.sandbox import _op_cmd
 
         cmd = _op_cmd("/sandbox/d", ["/sandbox/a", "/sandbox/b c"], copy=False)
         self.assertIn("'/sandbox/a'", cmd)
         self.assertIn("'/sandbox/b c'", cmd)
 
     def test_parse_op_result(self):
-        from src.controller.SandboxController import _parse_op_result
+        from src.web.routers.sandbox import _parse_op_result
 
         out = "OK\t/sandbox/a\nMISS\t/sandbox/b\nCONFLICT\t/sandbox/c\nFAIL\t/sandbox/d\n"
         ok, failed, nodest = _parse_op_result(out)
@@ -189,14 +189,14 @@ class TestOpHelpers(unittest.TestCase):
         self.assertIn("同名", failed[1]["reason"])
 
     def test_parse_op_result_nodest(self):
-        from src.controller.SandboxController import _parse_op_result
+        from src.web.routers.sandbox import _parse_op_result
 
         ok, failed, nodest = _parse_op_result("NODEST\n")
         self.assertEqual((ok, failed), ([], []))
         self.assertTrue(nodest)
 
     def test_parse_op_result_ignores_garbage(self):
-        from src.controller.SandboxController import _parse_op_result
+        from src.web.routers.sandbox import _parse_op_result
 
         self.assertEqual(_parse_op_result("noise\nOK\n"), ([], [], False))
 
