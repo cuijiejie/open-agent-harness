@@ -56,12 +56,14 @@ def main() -> int:
 
     row: dict | None = rbac.user_row(user)
     created: bool = False
+    pwd_set: bool = False
     if row is None:
         res: dict = rbac.create_user(user, "管理员", [ADMIN_ROLE], pwd)
         if not res.get("ok"):
             print(f"✗ 建号失败: {res.get('error')}")
             return 1
         created = True
+        pwd_set = True
     else:
         # 角色兜底：确保一定挂在 admin 角色上（手工删过角色也能恢复）
         rbac.assign(user, [ADMIN_ROLE])
@@ -70,14 +72,17 @@ def main() -> int:
             if not res.get("ok"):
                 print(f"✗ 设密码失败: {res.get('error')}")
                 return 1
+            pwd_set = True
         else:
             print(f"· {user} 已有密码，保持不变（要覆盖请加 --force-reset）")
 
     perm: dict = rbac.permissions(user)
     print(f"{'✓ 已创建' if created else '✓ 已就绪'}: {user}")
     print(f"  角色: {perm.get('roles')}  管理员: {perm.get('is_admin')}  工具: {perm.get('tools')}")
-    print(f"  密码: {'新设置的' if (created or args.force_reset) else '原有密码'}"
-          f"{'（默认 ' + pwd + '，请尽快修改）' if (created or args.force_reset) else ''}")
+    if pwd_set:
+        print(f"  密码: 已设置为「{pwd}」，请登录后立即修改")
+    else:
+        print("  密码: 保持不变（要覆盖请加 --force-reset）")
     log.warning(f"默认管理员就绪: user={user}, role={ADMIN_ROLE}, created={created}")
     return 0
 
