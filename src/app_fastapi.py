@@ -208,10 +208,9 @@ def _render_login(error: str = "") -> str:
     `pages.LOGIN_HTML` 是 **Jinja 模板**（从 Flask 的 `AuthUtil` 抽出来时保持原样），
     必须用 Jinja 渲染再返回；直接 `HTMLResponse(LOGIN_HTML)` 会把 `{{ hint }}`、
     `{% if need_password %}` 原样吐到页面上（切 FastAPI 后真实发生过的 bug）。
-    变量口径与 Flask 侧完全一致：hint / need_password / error。
+    只需要传 error；页面上不再显示说明文字。
     """
-    hint: str = "请使用管理员分配的账号和密码登录。"
-    return Template(LOGIN_HTML).render(hint=hint, error=error)
+    return Template(LOGIN_HTML).render(error=error)
 
 
 @app.get(f"{PREFIX}/login")

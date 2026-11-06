@@ -174,6 +174,13 @@
               <template v-if="meRoleLabels"><span class="user-dot">·</span><span>{{ meRoleLabels }}</span></template>
             </div>
           </div>
+          <button type="button" class="user-action" title="修改密码" @click="openChangePwd">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 2l-2 2m-7.6 7.6a5 5 0 1 1-7.1 7.1 5 5 0 0 1 7.1-7.1z"/>
+              <path d="M15.5 7.5l3 3L22 7l-3-3"/>
+            </svg>
+          </button>
           <button type="button" class="user-action" title="我的偏好" @click="openPrefs">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -602,6 +609,7 @@
                   </template>
                   <template v-else>
                     <button type="button" class="link-btn" @click="startEditUser(u)">编辑</button>
+                    <button type="button" class="link-btn" @click="openResetPwd(u)">重置密码</button>
                     <button type="button" class="link-btn" :disabled="userBusy" @click="toggleUserStatus(u)">
                       {{ u.status === 'disabled' ? '启用' : '停用' }}
                     </button>
@@ -908,6 +916,35 @@
         <a v-if="ctx.item.kind === 'file' || !isSystemDir(ctx.item.name)" class="ctx-item ctx-danger" @click="ctxDelete"><span class="ci">🗑</span>删除</a>
       </div>
     </div>
+    </transition>
+
+    <!-- 修改 / 重置密码 -->
+    <transition name="modal-fade">
+      <div v-if="pwdBox.open" class="modal-mask" @click.self="closePwdBox">
+        <div class="modal-card" role="dialog" aria-modal="true">
+          <div class="modal-head">
+            <span class="modal-icon">🔑</span>
+            <h4>{{ pwdBox.self ? '修改密码' : '重置密码' }}</h4>
+          </div>
+          <div class="modal-body">
+            <p class="modal-main">
+              {{ pwdBox.self ? '修改后需要重新登录。' : `为账号 ${pwdBox.user} 设置新密码。` }}
+            </p>
+            <input v-if="pwdBox.self" v-model="pwdBox.old" class="rbac-input pwd-input"
+                   type="password" placeholder="当前密码" autocomplete="current-password" />
+            <input v-model="pwdBox.pwd" class="rbac-input pwd-input" type="password"
+                   placeholder="新密码（至少 6 位）" autocomplete="new-password" />
+            <input v-if="pwdBox.self" v-model="pwdBox.pwd2" class="rbac-input pwd-input"
+                   type="password" placeholder="再次输入新密码" autocomplete="new-password" />
+            <p v-if="pwdBox.err" class="pwd-err">{{ pwdBox.err }}</p>
+          </div>
+          <div class="modal-foot">
+            <button type="button" class="modal-btn" @click="closePwdBox">取消</button>
+            <button type="button" class="modal-btn modal-btn-primary"
+                    :disabled="pwdBox.busy" @click="submitPwdBox">确定</button>
+          </div>
+        </div>
+      </div>
     </transition>
 
     <transition name="modal-fade">
@@ -1444,6 +1481,50 @@ const showToast = (msg, type = 'ok') => {
   toast.value = { show: true, msg: text, type: t }
   if (_toastTimer) clearTimeout(_toastTimer)
   _toastTimer = setTimeout(() => { toast.value = { ...toast.value, show: false } }, 2600)
+}
+
+// ===== 修改 / 重置密码 =====
+const pwdBox = ref({ open: false, self: false, user: '', old: '', pwd: '', pwd2: '', err: '', busy: false })
+const openChangePwd = () => {
+  pwdBox.value = { open: true, self: true, user: username.value, old: '', pwd: '', pwd2: '', err: '', busy: false }
+}
+const openResetPwd = (u) => {
+  pwdBox.value = { open: true, self: false, user: u.username, old: '', pwd: '', pwd2: '', err: '', busy: false }
+}
+const closePwdBox = () => { pwdBox.value = { ...pwdBox.value, open: false } }
+const submitPwdBox = async () => {
+  const box = pwdBox.value
+  box.err = ''
+  const pwd = String(box.pwd || '').trim()
+  if (pwd.length < 6) { box.err = '新密码至少 6 位'; return }
+  if (box.self) {
+    if (!box.old) { box.err = '请输入当前密码'; return }
+    if (pwd !== box.pwd2) { box.err = '两次输入的新密码不一致'; return }
+  }
+  box.busy = true
+  try {
+    const url = box.self
+      ? `${apiBase}/api/user/password`
+      : `${apiBase}/api/users/${encodeURIComponent(box.user)}/password`
+    const payload = box.self ? { old_password: box.old, new_password: pwd } : { password: pwd }
+    const res = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+    })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok || d.ok === false) { box.err = d.error || `失败（HTTP ${res.status}）`; return }
+    const wasSelf = box.self
+    box.open = false
+    if (wasSelf) {
+      showToast('密码已修改，请重新登录')
+      setTimeout(() => { window.location.href = `${apiBase}/login` }, 900)
+    } else {
+      showToast(`已重置 ${box.user} 的密码`)
+    }
+  } catch (e) {
+    box.err = '网络错误，请重试'
+  } finally {
+    box.busy = false
+  }
 }
 
 const confirmState = ref({ open: false, msg: '', resolve: null })
@@ -4370,6 +4451,9 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 }
 .rbac-input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.12); }
 .rbac-list { padding: 0 18px 18px; overflow-y: auto; max-height: 34vh; }
+.pwd-input { width: 100%; margin-top: 10px; }
+.pwd-err { margin: 10px 0 0; font-size: 12.5px; color: #c0392b; }
+
 .rbac-user {
   border-bottom: 1px solid #f0f2f5; background: #fff; margin: 0; padding: 0;
 }

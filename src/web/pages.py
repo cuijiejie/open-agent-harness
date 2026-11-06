@@ -38,7 +38,6 @@ LOGIN_HTML: str = """<!DOCTYPE html>
 <body>
   <form class="card" method="post">
     <h1>Open Agent Harness</h1>
-    <p class="sub">{{ hint }}</p>
     <label for="username">用户名</label>
     <input id="username" name="username" placeholder="例如 alice" autofocus
            autocomplete="username" required>

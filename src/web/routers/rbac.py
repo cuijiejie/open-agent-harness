@@ -92,6 +92,30 @@ def create_user(payload: dict | None = Body(None), username: str = Depends(requi
     return JSONResponse(res, status_code=400)
 
 
+@router.post("/api/user/password")
+def change_own_password(payload: dict | None = Body(None),
+                        username: str = Depends(require_login)):
+    """登录用户修改自己的密码：{"old_password": "...", "new_password": "..."}
+
+    必须校验原密码（防止会话被劫持后直接改密码把人锁在外面）。
+    """
+    body: dict = payload or {}
+    old: str = str(body.get("old_password") or "")
+    new: str = str(body.get("new_password") or "")
+    if len(new) < 6:
+        return JSONResponse({"ok": False, "error": "新密码至少 6 位"}, status_code=400)
+    if old == new:
+        return JSONResponse({"ok": False, "error": "新密码不能与原密码相同"}, status_code=400)
+    if not rbac.verify_password(username, old):
+        log.warning(f"修改密码失败（原密码错误）: user={username}")
+        return JSONResponse({"ok": False, "error": "原密码不正确"}, status_code=400)
+    res: dict = rbac.set_password(username, new)
+    if res.get("ok"):
+        log.warning(f"用户修改自己的密码: user={username}")
+        return JSONResponse(res)
+    return JSONResponse(res, status_code=400)
+
+
 @router.post("/api/users/{target}/password")
 def reset_password(target: str, payload: dict | None = Body(None),
                    username: str = Depends(require_login)):
