@@ -12,11 +12,12 @@
 RBAC 把权限挂到**岗位**上：角色声明"能用哪些工具"，用户挂角色。
 人员变动只改一行关系数据，不动配置、不重启。
 
-三类预置角色
+两类预置角色
 ------------
-    viewer    查看者  只读工具（提问、查询、解析附件）
-    operator  操作员  viewer + 沙箱执行 + 技能工具
-    admin     管理员  全部工具 + 角色分配
+    default   公共角色  公共工具（全员可用），新建用户的默认角色
+    admin     管理员    全部工具 + 角色分配
+
+其他岗位角色由管理员在「角色管理」里按需自建（不预置示例角色）。
 
 **没有审批流**：写操作由 RBAC 授权 + 工具内参数硬校验 + 对话里向用户确认来把关，
 不存在"待审批/复核人"环节（曾经有过 `is_approver` 标记和预置的 approver 角色，
@@ -39,10 +40,8 @@ from typing import Any
 from src.infra.utils.LogUtil import log
 
 # ========== 预置角色 ==========
-# 预置角色的默认工具：只放通用工具。业务工具请在自己的部署里
-# 通过「角色管理」页面分配（或改这里，随你的插件走）。
-_VIEWER_TOOLS: list[str] = ["ask_user"]
-_OPERATOR_TOOLS: list[str] = _VIEWER_TOOLS + ["sandbox_shell"]
+# 全新部署只预置两个角色：admin（管理员）+ default（公共角色）。
+# 其余角色由管理员在「角色管理」里按需自建，不再塞示例角色。
 
 # 人人默认可用、不参与角色分配的基础工具（唯一来源在 tools/registry.py）
 
@@ -68,20 +67,6 @@ def _always_on() -> tuple:
         return ("ask_user", "sandbox_shell")
 
 DEFAULT_ROLES: dict[str, dict] = {
-    "viewer": {
-        "name": "查看者",
-        "tools": _VIEWER_TOOLS,
-        "is_admin": 0,
-        "builtin": 0,               # 只是预置示例角色，管理员可以删
-        "desc": "只能查询和提问，不能改任何数据",
-    },
-    "operator": {
-        "name": "操作员",
-        "tools": _OPERATOR_TOOLS,
-        "is_admin": 0,
-        "builtin": 0,               # 只是预置示例角色，管理员可以删
-        "desc": "在只读基础上可在沙箱执行命令（写操作由工具内校验 + 对话确认把关，无审批流）",
-    },
     "default": {
         "name": "公共角色",
         "tools": [],                 # 播种时用「公共工具」动态填充（见 _always_on）
@@ -301,6 +286,7 @@ class RbacService:
                 # 内置标记归一：只有「管理员」和「默认角色（公共角色）」是系统角色，
                 # 其余预置角色（操作员/查看者）只是示例，允许管理员删除。
                 _dc: str = self.default_role_code()
+                # 老版本预置过 viewer/operator，新库不再预置；这里把它们的内置标记清掉，允许删除
                 cur.execute("UPDATE pa_roles SET is_builtin=0 WHERE role_code IN ('viewer','operator')")
                 cur.execute("UPDATE pa_roles SET is_builtin=1 WHERE role_code='admin'")
                 if _dc:
