@@ -47,18 +47,22 @@ def expected() -> set:
 
 
 def actual() -> set:
+    """从 OpenAPI schema 取路由表
+
+    不能直接扫 `app.routes`：新版 FastAPI（0.16x / starlette 1.x）把 `include_router`
+    注册成 mount，端点不再平铺在 `app.routes` 里（扫出来只有系统路由，会误报"全部缺失"）。
+    `app.openapi()` 会把 mount 里的路由一并展开，且路径参数已经是 `{name}` 形式。
+    """
     from src.app_fastapi import app
 
+    schema: dict = app.openapi()
     out: set = set()
-    for r in app.routes:
-        for meth in (getattr(r, "methods", None) or set()):
-            if meth in ("HEAD", "OPTIONS"):
+    for path, ops in (schema.get("paths") or {}).items():
+        for meth in ops.keys():
+            m = meth.upper()
+            if m in ("HEAD", "OPTIONS", "PARAMETERS"):
                 continue
-            p: str = getattr(r, "path", "")
-            # 业务路由挂在 PREFIX 下，比对前先剥掉（否则会误报"全部缺失"）
-            if p.startswith(PREFIX):
-                p = p[len(PREFIX):] or "/"
-            out.add((meth.upper(), norm(p)))
+            out.add((m, norm(path)))
     return out
 
 
