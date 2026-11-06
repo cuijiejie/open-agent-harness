@@ -5,14 +5,17 @@
   2. 接口响应 `Cache-Control: no-store`：避免浏览器缓存 /api 的 JSON（切流后拿到旧数据）
   3. 请求体超过上限直接 413（返回一句人话 JSON，而不是框架默认页）
 
-P0 不含 DB session 管理：open-agent 的数据库这阶段还是同步的，
-等数据层异步化（P3）时再把 `open_request_session/close_request_session` 加回来。
+数据库：请求进入时开一个 AsyncSession 挂到 ContextVar，响应结束 `await` 关闭；
+路由里 `get_db()` 拿到的就是它。**不要在别的任务里共用这个 session**——流式生成器
+跑在独立任务里，与请求级 session 不在同一 greenlet 上下文（yixin 上踩过：
+高并发报 `greenlet_spawn has not been called`，回复不落库）。
 """
 import time
 import uuid
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from src.infra.db.async_database import close_request_session, open_request_session
 from src.infra.utils.LogUtil import log
 
 MAX_BODY_BYTES: int = 100 * 1024 * 1024 + 8 * 1024 * 1024   # 100MB + multipart 余量
@@ -55,6 +58,9 @@ class RequestContextMiddleware:
         path: str = scope.get("path", "")
         method: str = scope.get("method", "")
 
+        # 请求级 DB session：只建对象、不连库（懒连接），不用 DB 的接口零成本
+        sess, token = open_request_session()
+
         async def _send(message: Message) -> None:
             if message["type"] == "http.response.start":
                 status_holder["status"] = message["status"]
@@ -71,6 +77,7 @@ class RequestContextMiddleware:
         try:
             await self.app(scope, receive, _send)
         finally:
+            await close_request_session(sess, token)
             elapsed: float = time.time() - t0
             if status_holder["status"] >= 400:
                 log.warning(f"[{rid}] {method} {path} → {status_holder['status']} ({elapsed:.3f}s)")

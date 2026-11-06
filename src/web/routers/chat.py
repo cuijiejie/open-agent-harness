@@ -26,8 +26,8 @@ from src.chat.stream import (
     process_chat_stream,
     process_upload_stream,
 )
-from src.infra.dao.SessionDao import SessionDao
-from src.infra.db.database import get_db
+from src.infra.dao.async_dao import SessionDao
+from src.infra.db.async_database import get_db
 from src.infra.dto.ChatDto import ChatRequest
 from src.infra.model.SessionModel import ChatSession
 from src.infra.utils.LogUtil import log
