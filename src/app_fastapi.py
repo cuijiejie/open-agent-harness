@@ -212,7 +212,7 @@ async def test_login(request: Request):
     return RedirectResponse(f"{PREFIX}/", status_code=302)
 
 
-@app.get(f"{PREFIX}/logout")
+@app.api_route(f"{PREFIX}/logout", methods=["GET", "POST"])
 async def logout(request: Request):
     user: str = get_current_user(request)
     request.session.clear()

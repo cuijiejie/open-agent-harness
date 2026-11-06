@@ -21,6 +21,7 @@ SYS_EXTRA = {
     ("GET", "/"), ("GET", "/logout"), ("POST", "/logout"),
     ("GET", "/api/version"), ("GET", "/api/user/currentUser"),
     ("GET", "/test.html"), ("GET", "/test-login"), ("POST", "/test-login"),
+    ("GET", "/login"), ("POST", "/login"),
 }
 
 
