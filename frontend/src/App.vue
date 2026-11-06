@@ -79,60 +79,6 @@
 
         <div class="sidebar-body" v-show="sessionsOpen" ref="sidebarBodyRef" @scroll="onSidebarScroll">
           <!-- 我的偏好（用户自己管） -->
-        <div v-if="showPrefs" class="prefs-mask" @click.self="showPrefs = false">
-          <div class="prefs-panel">
-            <div class="prefs-head">
-              <div class="prefs-tabs">
-                <button type="button" :class="['prefs-tab', { on: prefsTab === 'prefs' }]" @click="switchPrefsTab('prefs')">偏好</button>
-                <button type="button" :class="['prefs-tab', { on: prefsTab === 'know' }]" @click="switchPrefsTab('know')">业务知识</button>
-              </div>
-              <button type="button" class="prefs-close" @click="showPrefs = false">✕</button>
-            </div>
-            <template v-if="prefsTab === 'prefs'">
-            <div class="prefs-list">
-              <div v-if="!prefs.length" class="prefs-empty">还没有记录任何偏好</div>
-              <div v-for="p in prefs" :key="p.id" class="prefs-item">
-                <span class="prefs-text">{{ p.content }}</span>
-                <button type="button" class="prefs-del" @click="delPref(p.id)" title="删除">删除</button>
-              </div>
-            </div>
-            <div class="prefs-add">
-              <input v-model="prefInput" class="prefs-input" maxlength="300"
-                     placeholder="例如：回答用表格 / 只关注 3 年期数据"
-                     @keyup.enter="addPref" />
-              <button type="button" class="appr-ok" :disabled="!prefInput.trim()" @click="addPref">添加</button>
-            </div>
-            <div class="prefs-count">已用 {{ prefs.length }}/{{ prefsMax }} 条</div>
-            </template>
-
-            <!-- 业务知识（长期记忆） -->
-            <template v-else>
-              <div class="prefs-list">
-                <div v-if="!knowledge.length" class="prefs-empty">还没有记录任何业务知识</div>
-                <div v-for="k in knowledge" :key="k.id" class="prefs-item">
-                  <span class="prefs-text">
-                    <span class="know-scope" :class="k.scope">{{ k.scope === 'global' ? '共享' : '个人' }}</span>
-                    {{ k.content }}
-                    <span v-if="k.tags" class="know-tags">{{ k.tags }}</span>
-                  </span>
-                  <button v-if="k.scope !== 'global' || knowIsAdmin" type="button" class="prefs-del" @click="delKnowledge(k.id)"
-                          :title="k.scope === 'global' ? '共享知识，只有管理员可删除' : '删除'">删除</button>
-                </div>
-              </div>
-              <div class="prefs-add">
-                <input v-model="knowInput" class="prefs-input" maxlength="100"
-                       placeholder="一句话事实，如：产品 A 属于主推类目" @keyup.enter="addKnowledge" />
-              </div>
-              <div class="prefs-add">
-                <input v-model="knowTags" class="prefs-input" maxlength="100"
-                       placeholder="关键词（逗号分隔），如：M003838,主推,车抵" @keyup.enter="addKnowledge" />
-                <button type="button" class="appr-ok" :disabled="!knowInput.trim()" @click="addKnowledge">添加</button>
-              </div>
-              <div class="prefs-count">个人 {{ knowMine }}/{{ knowMax }} 条 · 共享知识由管理员维护</div>
-            </template>
-          </div>
-        </div>
-
         <div class="conv-archive-toggle" @click="toggleArchivedView()">
             {{ showArchived ? '← 返回会话列表' : '📦 已归档会话' }}
           </div>
@@ -160,33 +106,24 @@
           <div v-if="loadingSessions" class="conv-loading">加载中...</div>
         </div>
 
-        <!-- 左下角：当前登录用户（参考样式：头像 + 姓名/角色 + 右侧圆形操作按钮） -->
+        <!-- 左下角：当前登录用户（点整块进「个人设置」；退出按钮独立且醒目） -->
         <div class="user-card">
-          <div class="user-avatar user-trigger" :title="userLabel" @click.stop="toggleUserMenu">
+          <div class="user-avatar" :title="`${userLabel} · 个人设置`" @click="openMeTab('prefs')">
             <img class="user-avatar-img" :src="avatarSrc" alt="默认头像"
                  @error="avatarFailed = true" v-if="!avatarFailed" />
             <span v-else>{{ userInitial || 'U' }}</span>
           </div>
-          <div class="user-meta user-trigger" :title="username" @click.stop="toggleUserMenu">
+          <div class="user-meta" :title="`${userLabel} · 个人设置`" @click="openMeTab('prefs')">
             <div class="user-name">{{ userLabel }}</div>
-            <div class="user-sub" v-if="userRoleLabel && userRoleLabel !== userLabel">
-              <span>{{ userRoleLabel }}</span>
-            </div>
+            <div class="user-sub" v-if="userRoleLabel && userRoleLabel !== userLabel">{{ userRoleLabel }}</div>
           </div>
-          <!-- 点头像/名字弹出：修改密码 / 偏好 -->
-          <transition name="modal-fade">
-            <div v-if="userMenuOpen" class="user-menu" @click.stop>
-              <button type="button" class="user-menu-item" @click="pickUserMenu('password')">修改密码</button>
-              <button type="button" class="user-menu-item" @click="pickUserMenu('prefs')">偏好设置</button>
-            </div>
-          </transition>
-          <button type="button" class="user-action" title="退出登录" @click="doLogout">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+          <button type="button" class="user-exit" title="退出登录" @click="doLogout">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M15 17l5-5-5-5"/>
-              <path d="M20 12H9"/>
+              <path d="M15 17l5-5-5-5"/><path d="M20 12H9"/>
               <path d="M12 19H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/>
             </svg>
+            <span>退出</span>
           </button>
         </div>
       </aside>
@@ -810,6 +747,84 @@
     </div>
 
     <!-- 轨迹（右侧 tab 内容）：每轮一条，展开看工具耗时 -->
+    <!-- 个人设置：偏好 / 业务知识 / 修改密码（和系统设置一样用页面，不弹框） -->
+    <div v-if="activeTab === 'me'" class="tab-pane">
+      <div class="me-wrap">
+        <div class="prefs-head">
+          <div class="prefs-tabs">
+            <button type="button" :class="['prefs-tab', { on: meTab === 'prefs' }]" @click="openMeTab('prefs')">偏好</button>
+            <button type="button" :class="['prefs-tab', { on: meTab === 'know' }]" @click="openMeTab('know')">业务知识</button>
+            <button type="button" :class="['prefs-tab', { on: meTab === 'pwd' }]" @click="openMeTab('pwd')">修改密码</button>
+          </div>
+        </div>
+
+        <!-- 偏好 -->
+        <template v-if="meTab === 'prefs'">
+          <div class="prefs-list">
+            <div v-if="!prefs.length" class="prefs-empty">还没有记录任何偏好</div>
+            <div v-for="p in prefs" :key="p.id" class="prefs-item">
+              <span class="prefs-text">{{ p.content }}</span>
+              <button type="button" class="prefs-del" @click="delPref(p.id)" title="删除">删除</button>
+            </div>
+          </div>
+          <div class="prefs-add">
+            <input v-model="prefInput" class="prefs-input" maxlength="300"
+                   placeholder="例如：回答用表格 / 只关注 3 年期数据"
+                   @keyup.enter="addPref" />
+            <button type="button" class="appr-ok" :disabled="!prefInput.trim()" @click="addPref">添加</button>
+          </div>
+          <div class="prefs-count">已用 {{ prefs.length }}/{{ prefsMax }} 条</div>
+        </template>
+
+        <!-- 业务知识 -->
+        <template v-else-if="meTab === 'know'">
+          <div class="prefs-list">
+            <div v-if="!knowledge.length" class="prefs-empty">还没有记录任何业务知识</div>
+            <div v-for="k in knowledge" :key="k.id" class="prefs-item">
+              <span class="prefs-text">
+                <span class="know-scope" :class="k.scope">{{ k.scope === 'global' ? '共享' : '个人' }}</span>
+                {{ k.content }}
+                <span v-if="k.tags" class="know-tags">{{ k.tags }}</span>
+              </span>
+              <button v-if="k.scope !== 'global' || knowIsAdmin" type="button" class="prefs-del"
+                      @click="delKnowledge(k.id)"
+                      :title="k.scope === 'global' ? '共享知识，只有管理员可删除' : '删除'">删除</button>
+            </div>
+          </div>
+          <div class="prefs-add">
+            <input v-model="knowInput" class="prefs-input" maxlength="100"
+                   placeholder="一句话事实，如：产品 A 属于主推类目" @keyup.enter="addKnowledge" />
+          </div>
+          <div class="prefs-add">
+            <input v-model="knowTags" class="prefs-input" maxlength="100"
+                   placeholder="关键词（逗号分隔），如：M003838,主推,车抵" @keyup.enter="addKnowledge" />
+            <button type="button" class="appr-ok" :disabled="!knowInput.trim()" @click="addKnowledge">添加</button>
+          </div>
+          <div class="prefs-count">个人 {{ knowMine }}/{{ knowMax }} 条 · 共享知识由管理员维护</div>
+        </template>
+
+        <!-- 修改密码 -->
+        <template v-else>
+          <div class="me-form">
+            <label class="me-label">当前密码</label>
+            <input v-model="mePwd.old" type="password" class="rbac-input"
+                   autocomplete="current-password" placeholder="请输入当前密码" />
+            <label class="me-label">新密码<span class="me-hint">至少 6 位</span></label>
+            <input v-model="mePwd.pwd" type="password" class="rbac-input"
+                   autocomplete="new-password" placeholder="请输入新密码" />
+            <label class="me-label">再次输入新密码</label>
+            <input v-model="mePwd.pwd2" type="password" class="rbac-input"
+                   autocomplete="new-password" placeholder="再次输入新密码"
+                   @keyup.enter="submitMePwd" />
+            <p v-if="mePwd.err" class="pwd-err">{{ mePwd.err }}</p>
+            <button type="button" class="btn-primary me-save" :disabled="mePwd.busy" @click="submitMePwd">
+              {{ mePwd.busy ? '保存中…' : '保存' }}
+            </button>
+          </div>
+        </template>
+      </div>
+    </div>
+
     <div v-if="activeTab === 'files'" class="tab-pane">
       <div class="crumb-bar" @dragover.prevent="onRowDragOver(curPath)" @dragleave="onRowDragLeave" @drop.prevent="onRowDrop(curPath)">
         <a class="crumb-item" :class="{ current: !crumbs.length }" @click="loadDir('/sandbox')">
@@ -917,18 +932,12 @@
         <div class="modal-card" role="dialog" aria-modal="true">
           <div class="modal-head">
             <span class="modal-icon">🔑</span>
-            <h4>{{ pwdBox.self ? '修改密码' : '重置密码' }}</h4>
+            <h4>重置密码</h4>
           </div>
           <div class="modal-body">
-            <p class="modal-main">
-              {{ pwdBox.self ? '修改后需要重新登录。' : `为账号 ${pwdBox.user} 设置新密码。` }}
-            </p>
-            <input v-if="pwdBox.self" v-model="pwdBox.old" class="rbac-input pwd-input"
-                   type="password" placeholder="当前密码" autocomplete="current-password" />
+            <p class="modal-main">为账号 {{ pwdBox.user }} 设置新密码。</p>
             <input v-model="pwdBox.pwd" class="rbac-input pwd-input" type="password"
                    placeholder="新密码（至少 6 位）" autocomplete="new-password" />
-            <input v-if="pwdBox.self" v-model="pwdBox.pwd2" class="rbac-input pwd-input"
-                   type="password" placeholder="再次输入新密码" autocomplete="new-password" />
             <p v-if="pwdBox.err" class="pwd-err">{{ pwdBox.err }}</p>
           </div>
           <div class="modal-foot">
@@ -1263,7 +1272,7 @@ const openTabs = ref([
   { key: 'chat', title: '会话', closable: false },
 ])
 const activeTab = ref('chat')
-const TAB_TITLES = { chat: '会话', skills: '技能与工具', 'sys-users': '用户管理', 'sys-roles': '角色管理', 'sys-tools': '工具管理', 'sys-knowledge': '知识库', 'sys-audit': '操作审计', files: '我的文件', trace: '会话' }
+const TAB_TITLES = { chat: '会话', me: '个人设置', skills: '技能与工具', 'sys-users': '用户管理', 'sys-roles': '角色管理', 'sys-tools': '工具管理', 'sys-knowledge': '知识库', 'sys-audit': '操作审计', files: '我的文件', trace: '会话' }
 
 const openTab = (key) => {
   if (!openTabs.value.some(t => t.key === key)) {
@@ -1316,14 +1325,38 @@ const meRoleLabels = computed(() => {
   const names = meRoles.value.map((c) => roleName(c) || c)
   return names.join('、')
 })
-// ===== 左下角用户菜单（点头像/名字弹出）=====
-const userMenuOpen = ref(false)
-const toggleUserMenu = () => { userMenuOpen.value = !userMenuOpen.value }
-const closeUserMenu = () => { userMenuOpen.value = false }
-const pickUserMenu = (what) => {
-  userMenuOpen.value = false
-  if (what === 'password') openChangePwd()
-  else openPrefs()
+// ===== 个人设置页（偏好 / 业务知识 / 修改密码）=====
+const meTab = ref('prefs')
+const mePwd = ref({ old: '', pwd: '', pwd2: '', err: '', busy: false })
+const openMeTab = async (tab = 'prefs') => {
+  meTab.value = tab
+  openTab('me')
+  if (tab === 'prefs') await loadPrefs()
+  if (tab === 'know') await loadKnowledge()
+}
+const submitMePwd = async () => {
+  const b = mePwd.value
+  b.err = ''
+  const pwd = String(b.pwd || '').trim()
+  if (!b.old) { b.err = '请输入当前密码'; return }
+  if (pwd.length < 6) { b.err = '新密码至少 6 位'; return }
+  if (pwd !== b.pwd2) { b.err = '两次输入的新密码不一致'; return }
+  b.busy = true
+  try {
+    const res = await fetch(`${apiBase}/api/user/password`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_password: b.old, new_password: pwd }),
+    })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok || d.ok === false) { b.err = d.error || `失败（HTTP ${res.status}）`; return }
+    mePwd.value = { old: '', pwd: '', pwd2: '', err: '', busy: false }
+    showToast('密码已修改，请重新登录')
+    setTimeout(() => { window.location.href = `${apiBase}/login` }, 900)
+  } catch (e) {
+    b.err = '网络错误，请重试'
+  } finally {
+    b.busy = false
+  }
 }
 // 显示名：有中文名就只显示中文名；没有中文名（纯拼音/英文/等于账号）就显示账号
 const userLabel = computed(() => {
@@ -1495,12 +1528,9 @@ const showToast = (msg, type = 'ok') => {
 }
 
 // ===== 修改 / 重置密码 =====
-const pwdBox = ref({ open: false, self: false, user: '', old: '', pwd: '', pwd2: '', err: '', busy: false })
-const openChangePwd = () => {
-  pwdBox.value = { open: true, self: true, user: username.value, old: '', pwd: '', pwd2: '', err: '', busy: false }
-}
+const pwdBox = ref({ open: false, user: '', pwd: '', err: '', busy: false })
 const openResetPwd = (u) => {
-  pwdBox.value = { open: true, self: false, user: u.username, old: '', pwd: '', pwd2: '', err: '', busy: false }
+  pwdBox.value = { open: true, user: u.username, pwd: '', err: '', busy: false }
 }
 const closePwdBox = () => { pwdBox.value = { ...pwdBox.value, open: false } }
 const submitPwdBox = async () => {
@@ -1508,29 +1538,16 @@ const submitPwdBox = async () => {
   box.err = ''
   const pwd = String(box.pwd || '').trim()
   if (pwd.length < 6) { box.err = '新密码至少 6 位'; return }
-  if (box.self) {
-    if (!box.old) { box.err = '请输入当前密码'; return }
-    if (pwd !== box.pwd2) { box.err = '两次输入的新密码不一致'; return }
-  }
   box.busy = true
   try {
-    const url = box.self
-      ? `${apiBase}/api/user/password`
-      : `${apiBase}/api/users/${encodeURIComponent(box.user)}/password`
-    const payload = box.self ? { old_password: box.old, new_password: pwd } : { password: pwd }
-    const res = await fetch(url, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+    const res = await fetch(`${apiBase}/api/users/${encodeURIComponent(box.user)}/password`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pwd }),
     })
     const d = await res.json().catch(() => ({}))
     if (!res.ok || d.ok === false) { box.err = d.error || `失败（HTTP ${res.status}）`; return }
-    const wasSelf = box.self
     box.open = false
-    if (wasSelf) {
-      showToast('密码已修改，请重新登录')
-      setTimeout(() => { window.location.href = `${apiBase}/login` }, 900)
-    } else {
-      showToast(`已重置 ${box.user} 的密码`)
-    }
+    showToast(`已重置 ${box.user} 的密码`)
   } catch (e) {
     box.err = '网络错误，请重试'
   } finally {
@@ -2870,8 +2887,7 @@ const generateSessionId = () => {
 }
 const username = ref(config.username)
 const displayName = ref(config.displayName || config.username)
-onMounted(() => { document.addEventListener('click', closeUserMenu) })
-onBeforeUnmount(() => { document.removeEventListener('click', closeUserMenu) })
+
 const sessionId = ref(config.sessionId || generateSessionId())
 
 // 切到「轨迹」标签或切换会话时自动拉取（必须放在 sessionId 定义之后）
@@ -2913,11 +2929,9 @@ const formatTime = (isoStr) => {
 }
 
 const showArchived = ref(false)
-const showPrefs = ref(false)
 const prefs = ref([])
 const prefsMax = ref(10)
 const prefInput = ref('')
-const prefsTab = ref('prefs')
 const knowledge = ref([])
 const knowIsAdmin = ref(false)
 const knowInput = ref('')
@@ -2925,10 +2939,6 @@ const knowTags = ref('')
 const knowMax = ref(50)
 const knowMine = ref(0)
 
-const switchPrefsTab = (t) => {
-  prefsTab.value = t
-  if (t === 'know') loadKnowledge()
-}
 const loadKnowledge = async () => {
   try {
     const res = await fetch(`${apiBase}/api/knowledge`)
@@ -2974,10 +2984,7 @@ const loadPrefs = async () => {
     prefsMax.value = d.max_items || 10
   } catch (e) { showToast('读取偏好失败：' + e.message, 'err') }
 }
-const openPrefs = async () => {
-  showPrefs.value = true
-  await loadPrefs()
-}
+const openPrefs = async () => { await openMeTab('prefs') }
 const addPref = async () => {
   const text = prefInput.value.trim()
   if (!text) return
@@ -3698,25 +3705,29 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 .user-card {
   position: relative;
   margin-top: auto;
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 12px;
   padding: 12px 10px 14px; border-top: 1px solid rgba(148, 163, 184, .22);
 }
-/* 头像和名字整块可点，点击弹出菜单 */
-.user-trigger { cursor: pointer; }
-.user-trigger:hover .user-name { color: #4F46E5; }
-/* 用户菜单：贴在卡片上方 */
-.user-menu {
-  position: absolute; left: 10px; right: 10px; bottom: 64px;
-  padding: 6px; z-index: 40; background: #fff;
-  border: 1px solid #e5e9f2; border-radius: 10px;
-  box-shadow: 0 12px 30px rgba(15, 23, 42, .16);
+/* 头像 + 名字整块可点 → 打开「个人设置」页 */
+.user-avatar, .user-meta { cursor: pointer; }
+.user-card:hover .user-name { color: #4F46E5; }
+/* 退出：带文字的胶囊按钮，和侧栏其它控件同高，不再是一个小方块 */
+.user-exit {
+  display: flex; align-items: center; gap: 5px; flex: 0 0 auto;
+  height: 32px; padding: 0 10px; border-radius: 8px; cursor: pointer;
+  font-size: 12.5px; color: #64748b; background: #fff;
+  border: 1px solid #e2e8f5; transition: all .15s ease;
 }
-.user-menu-item {
-  display: block; width: 100%; padding: 9px 12px; text-align: left;
-  font-size: 13px; color: #334155; background: none; border: none;
-  border-radius: 8px; cursor: pointer; transition: background .15s ease, color .15s ease;
-}
-.user-menu-item:hover { background: #EEF2FF; color: #4F46E5; }
+.user-exit:hover { color: #dc2626; border-color: #fecaca; background: #fef2f2; }
+.user-exit svg { flex: 0 0 auto; }
+
+/* ===== 个人设置页（偏好 / 业务知识 / 修改密码）===== */
+.me-wrap { max-width: 720px; padding: 18px 22px 26px; }
+.me-form { display: flex; flex-direction: column; max-width: 360px; }
+.me-label { font-size: 13px; color: #334155; margin: 14px 0 6px; }
+.me-label:first-child { margin-top: 4px; }
+.me-hint { font-size: 12px; color: #94a3b8; margin-left: 6px; }
+.me-save { margin-top: 20px; align-self: flex-start; padding: 9px 22px; }
 .user-avatar {
   width: 40px; height: 40px; flex: 0 0 auto; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
