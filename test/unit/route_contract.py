@@ -58,6 +58,9 @@ def actual() -> set:
     schema: dict = app.openapi()
     out: set = set()
     for path, ops in (schema.get("paths") or {}).items():
+        # 业务路由挂在 PREFIX 下，比对前先剥掉
+        if path.startswith(PREFIX):
+            path = path[len(PREFIX):] or "/"
         for meth in ops.keys():
             m = meth.upper()
             if m in ("HEAD", "OPTIONS", "PARAMETERS"):
