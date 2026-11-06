@@ -19,6 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from jinja2 import Template
+
 from config.Configs import cfg
 from src.web.routers import (audit, chat, knowledge, mcp, platform_skill,
                              prefs, rbac, sandbox, skill, trace)
@@ -160,13 +162,27 @@ def _need_password() -> bool:
     return bool(str(getattr(cfg, "loginPassword", "") or "").strip())
 
 
+def _render_login(error: str = "") -> str:
+    """渲染登录页
+
+    `pages.LOGIN_HTML` 是 **Jinja 模板**（从 Flask 的 `AuthUtil` 抽出来时保持原样），
+    必须用 Jinja 渲染再返回；直接 `HTMLResponse(LOGIN_HTML)` 会把 `{{ hint }}`、
+    `{% if need_password %}` 原样吐到页面上（切 FastAPI 后真实发生过的 bug）。
+    变量口径与 Flask 侧完全一致：hint / need_password / error。
+    """
+    need: bool = _need_password()
+    hint: str = ("口令由部署者设置（[app] login_password）；留空即免密登录。"
+                 if need else "输入用户名即可进入。")
+    return Template(LOGIN_HTML).render(need_password=need, hint=hint, error=error)
+
+
 @app.get(f"{PREFIX}/login")
 async def login_page(request: Request):
     if get_current_user(request):
         return RedirectResponse(f"{PREFIX}/", status_code=302)
     from fastapi.responses import HTMLResponse
 
-    return HTMLResponse(LOGIN_HTML)
+    return HTMLResponse(_render_login())
 
 
 @app.post(f"{PREFIX}/login")
@@ -179,15 +195,15 @@ async def login_submit(request: Request):
     nxt: str = str(request.query_params.get("next") or f"{PREFIX}/")
 
     if not username:
-        return HTMLResponse("用户名不能为空", status_code=400)
+        return HTMLResponse(_render_login("用户名不能为空"), status_code=400)
     if _need_password() and password != cfg.loginPassword:
         log.warning(f"登录失败（口令错误）: user={username}")
-        return HTMLResponse("用户名或口令错误", status_code=401)
+        return HTMLResponse(_render_login("用户名或口令不正确"), status_code=401)
 
     from src.infra.RbacService import rbac
 
     if rbac.is_disabled(username):
-        return HTMLResponse("账号已停用，请联系管理员", status_code=403)
+        return HTMLResponse(_render_login("账号已停用，请联系管理员"), status_code=403)
     rbac.touch_user(username, "")
     request.session[SESSION_USER] = username
     request.session[SESSION_DISPLAY] = ""
