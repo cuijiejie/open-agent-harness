@@ -108,17 +108,46 @@
 
         <!-- 左下角：当前登录用户（点整块进「个人设置」；退出按钮独立且醒目） -->
         <div class="user-bar">
-        <div class="user-card">
-          <div class="user-avatar" :title="`${userLabel} · 个人设置`" @click="openMeTab('prefs')">
-            <img class="user-avatar-img" :src="avatarSrc" alt="默认头像"
-                 @error="avatarFailed = true" v-if="!avatarFailed" />
-            <span v-else>{{ userInitial || 'U' }}</span>
+          <!-- 点头像/名字：弹出「退出登录」 -->
+          <transition name="modal-fade">
+            <div v-if="userMenuOpen" class="user-pop" @click.stop>
+              <button type="button" class="user-pop-item" @click="closeUserMenu(); doLogout()">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M15 17l5-5-5-5"/><path d="M20 12H9"/>
+                  <path d="M12 19H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/>
+                </svg>
+                <span>退出登录</span>
+              </button>
+            </div>
+          </transition>
+
+          <div class="user-card">
+            <button type="button" class="user-id" :title="`${userLabel} · 账号菜单`"
+                    @click.stop="toggleUserMenu">
+              <div class="user-avatar">
+                <img class="user-avatar-img" :src="avatarSrc" alt="默认头像"
+                     @error="avatarFailed = true" v-if="!avatarFailed" />
+                <span v-else>{{ userInitial || 'U' }}</span>
+              </div>
+              <div class="user-meta">
+                <div class="user-name">{{ userLabel }}</div>
+                <div class="user-sub" v-if="userRoleLabel && userRoleLabel !== userLabel">{{ userRoleLabel }}</div>
+              </div>
+              <svg class="user-caret" width="13" height="13" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+            </button>
+            <button type="button" class="user-gear" title="个人设置（偏好 / 修改密码）"
+                    @click.stop="openMeTab('prefs')">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6h.09A1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+            </button>
           </div>
-          <div class="user-meta" :title="`${userLabel} · 个人设置`" @click="openMeTab('prefs')">
-            <div class="user-name">{{ userLabel }}</div>
-            <div class="user-sub" v-if="userRoleLabel && userRoleLabel !== userLabel">{{ userRoleLabel }}</div>
-          </div>
-        </div>
         </div>
       </aside>
     </Transition>
@@ -744,10 +773,6 @@
     <!-- 个人设置：偏好 / 业务知识 / 修改密码（和系统设置一样用页面，不弹框） -->
     <div v-if="activeTab === 'me'" class="tab-pane">
       <div class="me-wrap">
-        <div class="me-head">
-          <div class="me-title">个人设置</div>
-          <button type="button" class="me-logout" @click="doLogout">退出登录</button>
-        </div>
         <div class="prefs-head">
           <div class="prefs-tabs">
             <button type="button" :class="['prefs-tab', { on: meTab === 'prefs' }]" @click="openMeTab('prefs')">偏好</button>
@@ -1323,6 +1348,11 @@ const meRoleLabels = computed(() => {
   const names = meRoles.value.map((c) => roleName(c) || c)
   return names.join('、')
 })
+// ===== 左下角账号菜单（点头像/名字弹出：退出登录）=====
+const userMenuOpen = ref(false)
+const toggleUserMenu = () => { userMenuOpen.value = !userMenuOpen.value }
+const closeUserMenu = () => { userMenuOpen.value = false }
+
 // ===== 个人设置页（偏好 / 业务知识 / 修改密码）=====
 const meTab = ref('prefs')
 const mePwd = ref({ old: '', pwd: '', pwd2: '', err: '', busy: false })
@@ -2885,6 +2915,8 @@ const generateSessionId = () => {
 }
 const username = ref(config.username)
 const displayName = ref(config.displayName || config.username)
+onMounted(() => { document.addEventListener('click', closeUserMenu) })
+onBeforeUnmount(() => { document.removeEventListener('click', closeUserMenu) })
 
 const sessionId = ref(config.sessionId || generateSessionId())
 
@@ -3701,31 +3733,48 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 }
 /* ===== 左下角用户信息（头像 + 姓名/角色 + 圆形操作按钮） ===== */
 .user-bar {
+  position: relative;
   margin-top: auto;
   border-top: 1px solid rgba(148, 163, 184, .22);
   padding: 8px;
 }
-.user-card {
-  display: flex; align-items: center; gap: 10px;
-  padding: 6px 8px; border-radius: 8px;
-  cursor: pointer; transition: background .15s ease;
+.user-card { display: flex; align-items: center; gap: 4px; }
+/* 左：头像 + 名字 + ›，点开账号菜单 */
+.user-id {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; border: none; background: none; border-radius: 8px;
+  cursor: pointer; text-align: left; transition: background .15s ease;
 }
-.user-card:hover { background: #eef2f9; }
-.user-card:hover .user-name { color: #4F46E5; }
+.user-id:hover { background: #eef2f9; }
+.user-id:hover .user-name { color: #4F46E5; }
+.user-caret { flex: 0 0 auto; color: #cbd5e1; transition: color .15s ease; }
+.user-id:hover .user-caret { color: #94a3b8; }
+/* 右：齿轮 → 个人设置 */
+.user-gear {
+  flex: 0 0 auto; width: 30px; height: 30px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: none; cursor: pointer; color: #94a3b8;
+  transition: color .15s ease, background .15s ease;
+}
+.user-gear:hover { color: #4F46E5; background: #eef2f9; }
+/* 账号菜单：贴在用户行上方 */
+.user-pop {
+  position: absolute; left: 8px; right: 8px; bottom: calc(100% - 4px);
+  padding: 6px; z-index: 40; background: #fff;
+  border: 1px solid #e5e9f2; border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, .16);
+}
+.user-pop-item {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 9px 11px; border: none; background: none; border-radius: 8px;
+  font-size: 13px; color: #334155; cursor: pointer; text-align: left;
+  transition: background .15s ease, color .15s ease;
+}
+.user-pop-item:hover { background: #fef2f2; color: #dc2626; }
+.user-pop-item svg { flex: 0 0 auto; }
 
 /* ===== 个人设置页（偏好 / 业务知识 / 修改密码）===== */
 .me-wrap { max-width: 720px; padding: 18px 22px 26px; }
-.me-head {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 10px;
-}
-.me-title { font-size: 15px; font-weight: 600; color: #1e293b; }
-.me-logout {
-  padding: 5px 10px; border: none; border-radius: 7px; cursor: pointer;
-  font-size: 13px; color: #94a3b8; background: none;
-  transition: color .15s ease, background .15s ease;
-}
-.me-logout:hover { color: #dc2626; background: #fee2e2; }
 .me-form { display: flex; flex-direction: column; max-width: 360px; }
 .me-label { font-size: 13px; color: #334155; margin: 14px 0 6px; }
 .me-label:first-child { margin-top: 4px; }
