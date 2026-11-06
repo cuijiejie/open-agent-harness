@@ -512,6 +512,55 @@ class RbacService:
         self._status_cache[user] = (now, status)
         return status in ("disabled", "deleted")
 
+    async def ais_disabled(self, username: str) -> bool:
+        """`is_disabled` 的异步版（请求依赖 require_login 走这条）
+
+        语义与同步版一致：版本号检查 → 30 秒本地缓存 → 查库 → 缓存。
+        DB 用**连接池化的 AsyncSession**（不是每次 pymysql.connect）——这是每请求
+        路径上唯一还剩下的同步阻塞点。
+        """
+        user: str = (username or "").strip()
+        if not user:
+            return False
+        now: float = time.time()
+
+        try:
+            from src.infra.utils import CacheUtil
+
+            ver = await CacheUtil.aget("rbac:status:ver")
+            if ver is not None and str(ver) != self._status_ver:
+                self._status_ver = str(ver)
+                self._status_cache.clear()
+        except Exception:
+            pass
+
+        hit = self._status_cache.get(user)
+        if hit and now - hit[0] < 30:
+            return hit[1] in ("disabled", "deleted")
+
+        status: str = "active"
+        try:
+            if not self._schema_ready:
+                import asyncio
+
+                await asyncio.to_thread(self.ensure_schema)
+            from sqlalchemy import text as sa_text
+
+            from src.infra.db.database import acquire_db
+
+            # acquire_db：请求内借用中间件的 session，请求外（脚本/后台）自建并关闭，
+            # 避免 get_db() 在无请求上下文时留下的连接要等 GC 才回池
+            async with acquire_db() as adb:
+                row = (await adb.execute(
+                    sa_text("SELECT status FROM pa_users WHERE username=:u"), {"u": user}
+                )).first()
+            if row and row[0]:
+                status = str(row[0])
+        except Exception as e:
+            log.warning(f"读取账号状态失败（按未停用处理）: user={user}, err={e}")
+        self._status_cache[user] = (now, status)
+        return status in ("disabled", "deleted")
+
     def set_status(self, username: str, status: str) -> bool:
         """启用/停用。停用后该账号无法登录，已登录的接口请求也会被 403 拦下。"""
         user: str = (username or "").strip()

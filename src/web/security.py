@@ -65,6 +65,17 @@ def get_current_display_name(request: Request) -> str:
         return ""
 
 
+async def _ais_disabled(username: str) -> bool:
+    """账号停用检查（异步版，`require_login` 用）；失败放行——DB 抖动不该把所有人挡在门外。"""
+    try:
+        from src.infra.RbacService import rbac
+
+        return bool(await rbac.ais_disabled(username))
+    except Exception as e:
+        log.warning(f"查询账号停用状态失败（放行）: user={username}, err={e}")
+        return False
+
+
 def _is_disabled(username: str) -> bool:
     """账号是否停用；失败放行——数据库抖动不该把所有人挡在门外"""
     try:
@@ -82,7 +93,7 @@ async def require_login(request: Request) -> str:
     if not username:
         raise LoginRequired(is_api=is_api_path(request.url.path),
                             login_url=build_login_url(request))
-    if _is_disabled(username):
+    if await _ais_disabled(username):
         log.warning(f"停用账号访问: user={username}, path={request.url.path}")
         raise AccountDisabled(is_api=is_api_path(request.url.path))
     return username

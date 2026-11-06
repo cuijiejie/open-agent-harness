@@ -6,7 +6,7 @@
 - **同机部署**：通过 snap 版 openshell CLI 操作（subprocess）
 - **策略约束**：文件系统 / 网络由 OpenShell 策略 YAML 限制
   （见 cfg.openshellPolicy，沙箱创建时应用，文件系统策略不可热改）
-- **并发安全**：创建加锁，避免 gunicorn 多 worker 重复创建同一沙箱
+- **并发安全**：创建加锁，避免 uvicorn 多 worker 重复创建同一沙箱
 - **优雅降级**：未启用或 CLI 不可用时返回明确错误，不影响其他功能
 
 沙箱内隔离能力（由 OpenShell 内核级保证）：
@@ -15,6 +15,7 @@
 - 进程：以非 root 身份运行，seccomp 限制危险系统调用
 - 凭证：真实密钥不进入沙箱，由 supervisor 在出站请求时注入
 """
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -209,7 +210,7 @@ def _stage_policy_under_home(policy: str, home: str | None = None) -> str:
 def _sandbox_create_lock(name: str):
     """**跨进程**的「创建/恢复同一个沙箱」互斥锁（fcntl.flock）
 
-    为什么需要：gunicorn 6 个 worker 各有自己的进程锁，登录初始化（后台线程）
+    为什么需要：uvicorn 多 worker 各有自己的进程锁，登录初始化（后台任务）
     和首轮对话（另一进程）会同时判断 phase=None 并各自 create，后到者直接收到
     gateway 的 `invalid argument`。之前只做了"失败后复查"，那是事后补救。
 
@@ -317,8 +318,8 @@ class SandboxManager:
 
         gateway 只接受「小写字母 / 数字 / 连字符」，且**总长 ≤ 19**。之前是
         `agent-{把非字母数字换成 _}`，于是：
-          · `alice.wang` → `agent-alice_wang`（下划线非法）→ 创建直接失败；
-          · 中文用户名（如「李雷」）→ 含中文，同样失败；
+          · `cui.jie` → `agent-cui_jie`（下划线非法）→ 创建直接失败；
+          · 中文用户名（如「唐子龙」）→ 含中文，同样失败；
           · 用户名超过 13 字符 → 撞 19 字符上限。
         这些账号的沙箱功能长期是"静默不可用"（exec 返回错误，用户只看到执行失败）。
         现在：非法字符压成连字符；一旦发生有损映射或超长，就补 6 位哈希，
@@ -342,11 +343,7 @@ class SandboxManager:
         这里改成边读边计数，超过 max_chars 立刻关闭管道（子进程收到 EPIPE 退出），
         内存上限恒定，并把 truncated 标记带回去。
         """
-        env = dict(os.environ)
-        home: str = env.setdefault("HOME", os.path.expanduser("~"))
-        # snap 限制：CLI 无法在 $HOME 建隐藏临时目录（.tmpXXXX），
-        # upload/download 需要 TMPDIR 指向 snap 可写目录，否则报 Permission denied
-        env["TMPDIR"] = os.path.join(home, "snap", "openshell", "common")
+        env = self._cli_env()
 
         t0: float = time.time()
         proc = subprocess.Popen(
@@ -745,7 +742,7 @@ class SandboxManager:
     def artifact_path(self, username: str, session_id: str, filename: str) -> str | None:
         """取某个产出文件的宿主机路径（不存在返回 None）
 
-        安全：路径只由【登录会话里的用户名】+【前端会话 id】+【文件名基名】拼成，
+        安全：路径只由【CAS 会话里的用户名】+【前端会话 id】+【文件名基名】拼成，
         客户端指定不了目录 —— 天然跨不了用户、也穿越不出去。
         """
         name: str = os.path.basename((filename or "").replace("\\", "/"))
@@ -1179,6 +1176,409 @@ class SandboxManager:
         except Exception as e:
             log.warning(f"下载沙箱异常: {e}")
             return False
+
+    @staticmethod
+    def _cli_env() -> dict:
+        """CLI 运行环境（同步 `_cli` 与异步 `_acli` 共用，避免两套环境变量漂移）
+
+        snap 限制：CLI 无法在 $HOME 建隐藏临时目录（.tmpXXXX），
+        upload/download 需要 TMPDIR 指向 snap 可写目录，否则报 Permission denied。
+        """
+        env = dict(os.environ)
+        home: str = env.setdefault("HOME", os.path.expanduser("~"))
+        env["TMPDIR"] = os.path.join(home, "snap", "openshell", "common")
+        return env
+
+    # ------------------------------------------------------------------ #
+    # 异步 IO（P4）：流式链路走这里；同步版给 @tool / 同步端点保留
+    #
+    # ⚠️ 维护约定：aXxx 与 Xxx **行为必须完全一致**（同样的参数、同样的返回、
+    #    同样的日志与降级）。改其中一边就必须改另一边，否则会出现"流式链路和
+    #    工具链路行为不同"的诡异 bug。共用部分只有 `_cli_env`（环境）和
+    #    `_artifact_*`（常量/路径/索引）这些纯函数；**IO 层故意分叉**——
+    #    一个 Popen+线程、一个 create_subprocess_exec+协程，硬合会两边都难看。
+    # ------------------------------------------------------------------ #
+    async def _acli(self, args: list[str], timeout: int = 60,
+                    max_chars: int = 2_000_000) -> CliResult:
+        """`_cli` 的异步版：asyncio 子进程，不需要两条 drain 线程
+
+        截断语义与 `_cli` 相同：边读边计数，超过 max_chars 立刻终止子进程
+        （沙箱里一条 `yes` 不能把 worker 内存吃爆）。
+        """
+        env: dict = self._cli_env()
+        t0: float = time.time()
+        proc = await asyncio.create_subprocess_exec(
+            self.bin, *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        state: dict = {"truncated": False}
+
+        async def _drain(stream) -> bytes:
+            buf: list[bytes] = []
+            total: int = 0
+            while True:
+                chunk: bytes = await stream.read(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_chars:
+                    state["truncated"] = True
+                    buf.append(chunk[: max(0, max_chars - (total - len(chunk)))])
+                    # 必须杀掉子进程：只 break 会让它写满 64KB 管道缓冲后阻塞，
+                    # proc.wait() 一直不返回 → 整个命令假死到超时、输出全丢。
+                    # （同步版靠 stream.close() 发 EPIPE 达到同样目的）
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
+                    # 被杀之前可能还有数据在路上：继续读到 EOF 并丢弃，
+                    # 否则管道残留会让 transport 关闭时报错
+                    while True:
+                        try:
+                            if not await stream.read(65536):
+                                break
+                        except Exception:
+                            break
+                    break
+                buf.append(chunk)
+            return b"".join(buf)
+
+        out_t = asyncio.create_task(_drain(proc.stdout))
+        err_t = asyncio.create_task(_drain(proc.stderr))
+        try:
+            rc: int = await asyncio.wait_for(proc.wait(), timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            try:
+                await asyncio.wait_for(proc.wait(), 10)
+            except Exception:
+                pass
+            # 必须把两条 drain 等完，管道才会关闭；只 cancel 会让 transport
+            # 在解释器退出时 __del__ 抛 "Event loop is closed"
+            for t in (out_t, err_t):
+                try:
+                    await asyncio.wait_for(t, 3)
+                except Exception:
+                    t.cancel()
+            raise subprocess.TimeoutExpired(cmd=args, timeout=timeout)
+
+        if state["truncated"]:
+            # 同步版靠关管道让子进程收 EPIPE；异步版直接杀掉，语义等价
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(proc.wait(), 10)
+            except Exception:
+                pass
+
+        stdout: str = (await out_t).decode("utf-8", "replace")
+        stderr: str = (await err_t).decode("utf-8", "replace")
+        if state["truncated"]:
+            stderr += f"\n[CliResult] 输出超过 {max_chars} 字符，已截断并终止子进程"
+        return CliResult(returncode=rc, stdout=stdout, stderr=stderr,
+                         truncated=bool(state["truncated"]), elapsed=time.time() - t0)
+
+    async def aexec(self, username: str, command: str, timeout: int | None = None,
+                    max_output: int | None = None) -> ExecResult:
+        """异步版 `exec`：在用户自己的沙箱里跑 shell 命令
+
+        生命周期（`get_or_create` / `_touch_last_used`）仍是同步的，用 to_thread 包：
+        那是每个会话一次的冷路径（通常沙箱已存在、只有一次 stat），
+        热路径（真正的命令执行，1~3.5s）走 `_acli` 完全不占线程。
+        """
+        if not command or not command.strip():
+            return ExecResult(returncode=1, error="命令为空")
+
+        t = timeout or self.timeout
+        max_out = self.max_output if max_output is None else int(max_output)
+
+        try:
+            name = await asyncio.to_thread(self.get_or_create, username)
+        except Exception as e:
+            return ExecResult(returncode=1, error=str(e))
+        await asyncio.to_thread(self._touch_last_used, name)
+
+        max_chars = max(max_out * 4, 65536) if max_out > 0 else 2_000_000
+        try:
+            r = await self._acli(
+                ["sandbox", "exec", name, "--", "bash", "-lc", command],
+                timeout=t + 15,
+                max_chars=max_chars,
+            )
+        except subprocess.TimeoutExpired:
+            log.warning(f"沙箱命令超时: user={username}, timeout={t}s")
+            return ExecResult(returncode=124, error=f"命令执行超过 {t} 秒已中止")
+        except FileNotFoundError:
+            return ExecResult(returncode=127, error="未找到 openshell CLI，请确认已安装")
+        except Exception as e:
+            return ExecResult(returncode=1, error=f"{type(e).__name__}: {e}")
+
+        # 沙箱可能被外部停止 → 清缓存、自动恢复后重试一次（只 start，绝不重建）
+        if r.returncode != 0 and self._looks_stopped(r.stderr or ""):
+            log.warning(f"沙箱疑似未运行，尝试自动恢复: {name}")
+            self._known_sandboxes.discard(name)
+            try:
+                name = await asyncio.to_thread(self.get_or_create, username)
+                r = await self._acli(
+                    ["sandbox", "exec", name, "--", "bash", "-lc", command],
+                    timeout=t + 15,
+                    max_chars=max_chars,
+                )
+                log.info(f"自动恢复后重试成功: {name}")
+            except Exception as e:
+                log.warning(f"自动恢复失败: {name}, err={e}")
+
+        stdout, stderr = r.stdout or "", r.stderr or ""
+        truncated = bool(r.truncated)
+        if max_out > 0 and len(stdout) > max_out:
+            stdout, truncated = stdout[:max_out], True
+        if max_out > 0 and len(stderr) > max_out:
+            stderr = stderr[:max_out]
+
+        log.info(
+            f"沙箱执行(异步): user={username}, rc={r.returncode}, "
+            f"out={len(stdout)}B, err={len(stderr)}B, cmd={command[:120]!r}"
+        )
+        if r.returncode != 0 and stderr.strip():
+            log.warning(
+                f"沙箱命令失败详情(异步): user={username}, cmd={command[:120]!r}, "
+                f"stderr={stderr.strip()[:500]}"
+            )
+        return ExecResult(stdout=stdout, stderr=stderr,
+                          returncode=r.returncode, truncated=truncated)
+
+    async def aupload(self, username: str, local_path: str, remote_path: str) -> bool:
+        """异步版 `upload`（暂存/清理这类宿主 IO 走 to_thread，CLI 走 `_acli`）"""
+        if not self.enabled:
+            log.warning(f"沙箱未启用，跳过文件上传: user={username}")
+            return False
+        try:
+            name: str = await asyncio.to_thread(self.get_or_create, username)
+        except Exception as e:
+            log.warning(f"上传前获取沙箱失败: user={username}, err={e}")
+            return False
+
+        try:
+            staged: str = await asyncio.to_thread(self._stage_in_home, local_path)
+        except Exception as e:
+            log.warning(f"上传前暂存失败，放弃: user={username}, err={e}")
+            return False
+
+        try:
+            r = await self._acli(
+                ["sandbox", "upload", "--no-git-ignore", name, staged, remote_path],
+                timeout=240,
+            )
+        except subprocess.TimeoutExpired:
+            log.warning(f"上传文件到沙箱超时: user={username}, file={local_path}")
+            return False
+        except Exception as e:
+            log.warning(f"上传文件到沙箱异常: user={username}, err={e}")
+            return False
+        finally:
+            if staged != local_path:
+                try:
+                    await asyncio.to_thread(os.remove, staged)
+                except OSError:
+                    pass
+
+        if r.returncode != 0:
+            log.warning(
+                f"上传文件到沙箱失败: sandbox={name}, rc={r.returncode}, "
+                f"stderr={(r.stderr or '').strip()[:300]}"
+            )
+            return False
+
+        log.info(f"上传文件到沙箱成功: sandbox={name}, {local_path} -> {remote_path}")
+        return True
+
+    async def adownload(self, username: str, remote_path: str, local_path: str) -> bool:
+        """异步版 `download`（snap 只能写 $HOME，故先下到 pa-stage 再搬）"""
+        try:
+            name = await asyncio.to_thread(self.get_or_create, username)
+            stage_dir: str = os.path.join(os.path.expanduser("~"), "pa-stage")
+            await asyncio.to_thread(os.makedirs, stage_dir, exist_ok=True)
+            tmp_local: str = os.path.join(
+                stage_dir, f"{uuid.uuid4().hex[:12]}_{os.path.basename(local_path)}"
+            )
+            r = await self._acli(
+                ["sandbox", "download", name, remote_path, tmp_local], timeout=180
+            )
+            if r.returncode != 0:
+                log.warning(
+                    f"下载沙箱文件失败: sandbox={name}, {remote_path}, "
+                    f"stderr={(r.stderr or '').strip()[:200]}"
+                )
+                return False
+            if not await asyncio.to_thread(os.path.exists, tmp_local):
+                log.warning(f"下载命令返回成功但文件不存在: {tmp_local}")
+                return False
+            parent: str = os.path.dirname(local_path)
+            if parent:
+                await asyncio.to_thread(os.makedirs, parent, exist_ok=True)
+            await asyncio.to_thread(shutil.move, tmp_local, local_path)
+            return True
+        except Exception as e:
+            log.warning(f"下载沙箱异常: {e}")
+            return False
+
+    async def alist_artifacts(self, username: str) -> list[str]:
+        """异步版 `list_artifacts`（同一套筛选规则，只是两条命令改 await）"""
+        files: list[str] = []
+        seen: dict[str, int] = {}
+        dirs: str = " ".join(_ARTIFACT_DIRS)
+        res = await self.aexec(
+            username,
+            f"find {dirs} -maxdepth 3 -type f ! -name '.*' 2>/dev/null | head -200 || true",
+            timeout=25,
+        )
+        for p in (res.stdout or "").splitlines():
+            p = p.strip()
+            if not p or p.startswith("/sandbox/output/.tmp"):
+                continue
+            name: str = os.path.basename(p)
+            if name in _ARTIFACT_SKIP_NAMES:
+                continue
+            if os.path.splitext(name)[1].lower() in _ARTIFACT_SKIP_EXTS:
+                continue
+            n: int = seen.get(name, 0)
+            seen[name] = n + 1
+            files.append(p)
+
+        res = await self.aexec(username, "ls -1 -p -A /sandbox/ 2>/dev/null || true", timeout=20)
+        for n in (res.stdout or "").splitlines():
+            if not n or n.endswith("/") or n.startswith("."):
+                continue
+            if n in _ARTIFACT_SKIP_NAMES:
+                continue
+            if os.path.splitext(n)[1].lower() in _ARTIFACT_SKIP_EXTS:
+                continue
+            if n in ("skills", "skills-disabled", "skills-trash", "out", "output", "outputs", "deliverables"):
+                continue
+            files.append(f"/sandbox/{n}")
+        return files
+
+    async def _aremote_meta(self, username: str, remotes: list[str]) -> dict:
+        """异步版 `_remote_meta`（一次 stat 批量取大小+指纹）"""
+        if not remotes:
+            return {}
+        args: str = " ".join(shlex.quote(p) for p in remotes)
+        r = await self.aexec(username, f"stat -c %s:%Y:%n -- {args} 2>/dev/null || true", timeout=30)
+        found: dict = {}
+        for line in (r.stdout or "").splitlines():
+            parts: list = line.split(":", 2)
+            if len(parts) < 3:
+                continue
+            size_s: str = parts[0].strip()
+            if not size_s.isdigit():
+                continue
+            mtime_s: str = parts[1].strip()
+            path: str = parts[2].strip()
+            found.setdefault(path, (int(size_s), f"{size_s}:{mtime_s}"))
+        if len(found) < len(remotes):
+            by_name: dict = {os.path.basename(p): v for p, v in found.items()}
+            for p in remotes:
+                if p not in found and os.path.basename(p) in by_name:
+                    found[p] = by_name[os.path.basename(p)]
+        return found
+
+    async def acollect_artifacts(self, username: str, session_id: str) -> tuple[list[dict], int]:
+        """异步版 `collect_artifacts`：口径与同步版完全一致
+
+        单文件 100MB、每轮最多 5 个、超出不删除只提示、按"本轮新产出"优先占名额、
+        用户级指纹索引去重（细节见同步版注释）。
+        """
+        result: list[dict] = []
+        if not self.enabled:
+            return result, 0
+        try:
+            remotes_all: list[str] = await self.alist_artifacts(username)
+            meta: dict = await self._aremote_meta(username, remotes_all)
+        except Exception as e:
+            log.warning(f"列出产出文件失败(异步): user={username}, err={e}")
+            return result, 0
+        if not remotes_all:
+            return result, 0
+
+        dst: str = self._artifact_root(username, session_id)
+        await asyncio.to_thread(os.makedirs, dst, exist_ok=True)
+        index: dict = self._load_artifact_index(username)
+        first_run: bool = not os.path.isfile(self._artifact_index_path(username))
+        index_dirty: bool = False
+
+        base_counts: dict[str, int] = {}
+        for r in remotes_all:
+            b: str = os.path.basename(r)
+            base_counts[b] = base_counts.get(b, 0) + 1
+        name_map: dict[str, str] = {}
+        used_names: set[str] = set()
+        for r in remotes_all:
+            base: str = os.path.basename(r)
+            if base_counts.get(base, 0) > 1:
+                parent: str = os.path.basename(os.path.dirname(r)) or "out"
+                base = f"{parent}_{base}"
+            nm: str = base
+            i: int = 1
+            while nm in used_names:
+                i += 1
+                nm = f"{os.path.splitext(base)[0]}_{i}{os.path.splitext(base)[1]}"
+            used_names.add(nm)
+            name_map[r] = nm
+
+        now_ts: float = time.time()
+        candidates: list[tuple[str, str, str, bool, bool]] = []
+        for remote in remotes_all:
+            name: str = name_map.get(remote) or os.path.basename(remote)
+            info = meta.get(remote)
+            if not info:
+                continue
+            remote_size, digest = info
+            if remote_size <= 0 or remote_size > _ARTIFACT_MAX_BYTES:
+                continue
+            local: str = os.path.join(dst, name)
+            mtime_i: int = 0
+            try:
+                mtime_i = int(str(digest).split(":", 1)[1])
+            except (IndexError, ValueError):
+                mtime_i = 0
+            recent: bool = mtime_i > 0 and (now_ts - mtime_i) <= _ARTIFACT_NEW_WINDOW_S
+            changed: bool = recent if first_run else (index.get(name) != digest)
+            need_copy: bool = changed or not os.path.isfile(local)
+            candidates.append((remote, name, digest, changed, need_copy))
+        candidates.sort(key=lambda x: (0 if x[3] else 1, 0 if x[4] else 1))
+        picked = candidates[:_ARTIFACT_MAX_FILES]
+        skipped: int = max(0, len(candidates) - len(picked))
+
+        for remote, name, digest, changed, need_copy in picked:
+            local = os.path.join(dst, name)
+            if need_copy:
+                if not await self.adownload(username, remote, local):
+                    continue
+                size: int = os.path.getsize(local) if os.path.isfile(local) else 0
+                if size <= 0 or size > _ARTIFACT_MAX_BYTES:
+                    try:
+                        os.remove(local)
+                    except OSError:
+                        pass
+                    continue
+                if changed or first_run:
+                    index[name] = digest
+                    index_dirty = True
+            else:
+                size = os.path.getsize(local)
+            result.append({"name": name, "size": size, "changed": changed})
+        if index_dirty:
+            self._save_artifact_index(username, None, index)
+        if result or skipped:
+            log.info(f"产出文件回传(异步): user={username}, session={session_id}, "
+                     f"files={[a['name'] for a in result]}, "
+                     f"changed={[a['name'] for a in result if a['changed']]}, "
+                     f"skipped(超出每轮 5 个上限)={skipped}")
+        return result, skipped
 
     def list_sandboxes(self) -> list[dict]:
         """列出所有沙箱（运维用）"""

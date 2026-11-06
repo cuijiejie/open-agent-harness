@@ -115,6 +115,64 @@ class RedisUtil:
             retry_on_timeout=True,
         )
 
+    # ========== 异步客户端（P3b） ==========
+
+    def _create_async(self):
+        """建异步客户端（redis.asyncio）。配置与同步版一致，含集群分支。"""
+        import redis.asyncio as aredis
+
+        password = cfg.redisPassword or None
+        if cfg.redisCluster:
+            nodes: list = []
+            for node_addr in cfg.redisNodes:
+                node_addr = (node_addr or "").strip()
+                if not node_addr:
+                    continue
+                if ":" in node_addr:
+                    host, port = node_addr.rsplit(":", 1)
+                    nodes.append(aredis.cluster.ClusterNode(host, int(port)))
+                else:
+                    nodes.append(aredis.cluster.ClusterNode(node_addr, 6379))
+            if not nodes:
+                nodes = [aredis.cluster.ClusterNode(cfg.redisHost, cfg.redisPort)]
+            return aredis.RedisCluster(
+                startup_nodes=nodes, password=password,
+                decode_responses=False, socket_connect_timeout=5,
+                socket_keepalive=True,
+            )
+        return aredis.Redis(
+            host=cfg.redisHost, port=cfg.redisPort, password=password, db=cfg.redisDB,
+            decode_responses=False, socket_connect_timeout=5, socket_keepalive=True,
+        )
+
+    @property
+    def aclient(self):
+        """异步客户端（**只在异步上下文用**）
+
+        按事件循环缓存：uvicorn 每个 worker 一个 loop，正常只建一次；
+        测试脚本里多次 `asyncio.run` 会换 loop，所以不能只缓存一个实例
+        （旧客户端绑在已关闭的 loop 上会报 "Event loop is closed"）。
+
+        可用性沿用同步客户端的判断：Redis 挂了时同步端已置 None，
+        这里直接跟着降级，不必再异步 ping 一次（少一次往返）。
+        """
+        import asyncio
+
+        if not self.available:
+            return None
+        loop = asyncio.get_running_loop()
+        cls = type(self)
+        holder = getattr(cls, "_async_holder", None)
+        if holder is not None and holder[0] is loop and holder[1] is not None:
+            return holder[1]
+        try:
+            client = self._create_async()
+        except Exception as e:
+            log.warning(f"Redis 异步客户端创建失败，降级: {e}")
+            return None
+        cls._async_holder = (loop, client)
+        return client
+
     # ========== 公共接口 ==========
 
     @property

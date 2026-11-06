@@ -34,6 +34,27 @@ def _client():
     return None
 
 
+async def aget(key: str) -> Any | None:
+    """异步版 `get`：异步上下文（请求依赖/流式链路）里用这个，别用同步版
+
+    语义完全一致：Redis 不可用/取不到/解析失败 → None（调用方走数据库）。
+    """
+    try:
+        if redis_util is None or not redis_util.available:
+            return None
+        c = redis_util.aclient
+        if c is None:
+            return None
+        raw = await c.get(key)
+        if raw is None:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
 def get(key: str) -> Any | None:
     """取缓存；不存在或不可用返回 None"""
     c = _client()
