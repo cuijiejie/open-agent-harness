@@ -10,10 +10,12 @@ P0 只做**框架层**：会话（与 Flask 双向兼容）、鉴权依赖、中
 
 P1 才把 60 个 controller 路由搬过来，P2 再删 Flask。
 """
+import asyncio
 import os
 import re
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -32,10 +34,30 @@ _DIST_DIR: str = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "dist"
 )
 
+async def lifespan(_app: FastAPI):
+    """启动时初始化异步 checkpointer
+
+    LangGraph 的 `astream` 要求异步 saver（`AsyncPostgresSaver`），而 agent 管理器是
+    模块级单例（import 期就存在），只能在这里把实例准备好；`setup()` 幂等，
+    老数据（同步 saver 写的）可以直接读，不需要迁库。
+    """
+    from src.infra.CheckpointerManager import init_checkpointer_async
+
+    await init_checkpointer_async()
+    log.info(f"FastAPI 启动: prefix={PREFIX}, pid={os.getpid()}")
+    yield
+    log.info(f"FastAPI 关闭: pid={os.getpid()}")
+
+
 app: FastAPI = FastAPI(
     title="Open Agent Harness",
+    lifespan=lifespan,
     docs_url=None, redoc_url=None, openapi_url=None,     # 不对外暴露文档
 )
+
+# 与 Flask-CORS(app) 默认行为一致
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+                   allow_methods=["*"], allow_headers=["*"])
 
 # 会话：cookie 名/签名/序列化与 Flask 完全一致 → 切流、回滚都不需要重新登录
 app.add_middleware(FlaskCompatibleSessionMiddleware, secret_key=cfg.secretKey)

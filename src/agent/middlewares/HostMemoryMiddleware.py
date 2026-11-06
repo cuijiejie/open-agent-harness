@@ -65,5 +65,15 @@ class HostMemoryMiddleware(AgentMiddleware):
             log.debug(f"AGENT.md 注入失败（忽略）: {e}")
         return handler(request)
 
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        # 异步路径必须单独实现（基类的 awrap_model_call 会直接抛 NotImplementedError）
+        if not self._text:
+            return await handler(request)
+        try:
+            _append_to_system(request, self._text)
+        except Exception as e:
+            log.debug(f"AGENT.md 注入失败（忽略）: {e}")
+        return await handler(request)
+
     def before_model(self, state: Any, runtime: Any = None) -> dict | None:
         return None

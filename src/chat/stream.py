@@ -20,10 +20,13 @@ import os
 import re as _re
 import threading
 import time
+import asyncio
 import base64
 import urllib.request
 import urllib.error
-from typing import Any, Generator
+from typing import Any, AsyncGenerator, Generator
+
+from src.infra.db.async_database import session_scope
 
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
@@ -31,7 +34,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from src.agent.middlewares.FixToolNameMiddleware import HallucinationLoopError
 from src.infra.utils.LogUtil import log
-from src.infra.dao import SessionDao, MessageDao
+from src.infra.dao.async_dao import MessageDao, SessionDao
 from src.agent.main_agent import create_agent
 from config.Configs import cfg
 
@@ -41,7 +44,53 @@ from config.Configs import cfg
 
 
 
-def _finish_turn(acc: dict, username: str, session_id: str, t0: float) -> None:
+# 后台收尾任务的强引用集合：asyncio 只保留弱引用，不记住就可能被 GC 掉
+_POST_TASKS: set = set()
+
+
+def _spawn_post_turn(agent: CompiledStateGraph, config: dict[str, Any],
+                     session_id: str, username: str, acc: dict) -> None:
+    """把「上下文治理 + 技能缓存清理」挂成后台 task（替代原来的后台线程）
+
+    为什么不再用线程：
+    1. 异步化后治理里的模型调用/DB 都是 await，占一个 task 而不是一个线程；
+    2. `AsyncPostgresSaver` 的连接池**绑定创建它的事件循环**，从别的线程
+       `asyncio.run(...)` 会直接报 "Future attached to a different loop"。
+    """
+
+    async def _run() -> None:
+        from src.infra.db.async_database import session_scope
+
+        try:
+            # 请求级 session 在响应结束时会被中间件关掉，这里用独立 session
+            async with session_scope():
+                await _govern_context(agent, config, session_id, username)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning(f"上下文治理失败（忽略，下一轮还会再治理）: {e}")
+        try:
+            if acc.get("skills_touched"):
+                from src.agent.main_agent import evict_agent_from_cache
+
+                evict_agent_from_cache(session_id, username)
+                log.info(f"技能目录有改动，已清理 agent 缓存（下一轮重新加载技能工具）: user={username}")
+        except Exception as e:
+            log.warning(f"清理 agent 缓存失败（技能工具需新会话生效）: {e}")
+
+    try:
+        task = asyncio.create_task(_run(), name=f"post-turn-{(session_id or '')[:8]}")
+        _POST_TASKS.add(task)
+        task.add_done_callback(_POST_TASKS.discard)
+    except RuntimeError as e:      # 没有运行中的事件循环（脚本/测试）→ 同步跑完
+        log.warning(f"无法创建后台任务，改为同步执行治理: {e}")
+        try:
+            asyncio.run(_run())
+        except Exception as e2:
+            log.warning(f"上下文治理失败（忽略）: {e2}")
+
+
+async def _finish_turn(acc: dict, username: str, session_id: str, t0: float) -> None:
     """本轮收尾：指标 + 轨迹。**幂等**——多个 done 分支都调用，只记一次。
 
     为什么需要：stream 是生成器，客户端收到 done 就断流、生成器被关闭，
@@ -57,7 +106,7 @@ def _finish_turn(acc: dict, username: str, session_id: str, t0: float) -> None:
 
         _ans: str = str(acc.get("text") or "").strip()
         if _ans:
-            TraceService.record(username=username, session_id=session_id, kind="assistant",
+            await asyncio.to_thread(TraceService.record, username=username, session_id=session_id, kind="assistant",
                                 name="助手回复", args="", result=_ans, status="ok",
                                 elapsed_ms=int((time.time() - t0) * 1000),
                                 turn_no=int(acc.get("turn_no") or 0))
@@ -75,7 +124,7 @@ def _finish_turn(acc: dict, username: str, session_id: str, t0: float) -> None:
 
         _sb = SandboxManager()
         if _sb.enabled and _touched:
-            _sb.exec(
+            await _sb.aexec(
                 username,
                 "mkdir -p /sandbox/output && cd /sandbox && "
                 r"find . -maxdepth 1 -type f \( -name '*.xlsx' -o -name '*.xls' -o -name '*.docx' "
@@ -85,7 +134,7 @@ def _finish_turn(acc: dict, username: str, session_id: str, t0: float) -> None:
                 timeout=25,
             )
             # 产物目录去污染：模型爱把脚本也写进 output/，统一挪到 work/scripts/
-            _sb.exec(
+            await _sb.aexec(
                 username,
                 "mkdir -p /sandbox/work/scripts && "
                 r"find /sandbox/output -type f \( -name '*.py' -o -name '*.sh' \) "
@@ -94,7 +143,7 @@ def _finish_turn(acc: dict, username: str, session_id: str, t0: float) -> None:
             )
 
             # 中间产物（脚本/日志/json/csv/txt）扫进 .tmp/，根目录保持干净
-            _sb.exec(
+            await _sb.aexec(
                 username,
                 "mkdir -p /sandbox/.tmp && cd /sandbox && "
                 r"find . -maxdepth 1 -type f \( -name '*.py' -o -name '*.json' -o -name '*.jsonl' "
@@ -138,8 +187,6 @@ def _finish_turn(acc: dict, username: str, session_id: str, t0: float) -> None:
 #   MessageDao.create_message(..., full_response) 这一条路，思考从不进该路径。
 # · 工具调用推 {"step": {...}}，前端渲染成过程卡片（正在查产品 / 正在沙箱执行命令…）。
 _TOOL_LABELS: dict[str, str] = {
-    # 内置工具的中文名；插件工具的中文名在 manifest.json 里声明（display_name），
-    # 这里没有就走 display_name → 工具名的顺序兜底
     "sandbox_shell": "在沙箱执行命令",
     "ask_user": "等待你的选择",
     "read_file": "读取文件",
@@ -339,7 +386,7 @@ def _strip_injected_context(text: str) -> str:
     return t
 
 
-def _build_context_prefix(agent: CompiledStateGraph, config: dict[str, Any],
+async def _build_context_prefix(agent: CompiledStateGraph, config: dict[str, Any],
                           session_id: str = "", username: str = "") -> str:
     """构建每轮注入的"补充上下文"前缀。两种内容，**互不重复**：
 
@@ -353,7 +400,7 @@ def _build_context_prefix(agent: CompiledStateGraph, config: dict[str, Any],
     summary: str = ""
     if session_id:
         try:
-            summary = SessionDao.get_summary(session_id, username)
+            summary = await SessionDao.get_summary(session_id, username)
         except Exception as e:
             log.warning(f"读取会话摘要失败（忽略）: {e}")
 
@@ -369,7 +416,7 @@ def _build_context_prefix(agent: CompiledStateGraph, config: dict[str, Any],
     # ② state 里已有历史 → 只带摘要，不再拼【对话历史】
     messages: list[Any] = []
     try:
-        state = agent.get_state(config)
+        state = await agent.aget_state(config)
         if state and state.values:
             messages = list(state.values.get("messages", []))
     except Exception:
@@ -385,7 +432,7 @@ def _build_context_prefix(agent: CompiledStateGraph, config: dict[str, Any],
         try:
             # 注意：必须用「前端会话号 + 用户名」查（内部会解析成主键），
             # 直接拿前端 session_id 比 chat_messages.session_id 永远查不到
-            recent_msgs = SessionDao.get_recent_messages(session_id, username, limit=12)
+            recent_msgs = await SessionDao.get_recent_messages(session_id, username, limit=12)
             if recent_msgs:
                 for m in recent_msgs:
                     if m.role == 'user':
@@ -472,10 +519,10 @@ def _sanitize_tool_messages(messages: list[Any]) -> list[Any]:
     return cleaned
 
 
-def _sanitize_existing_state(agent: CompiledStateGraph, config: dict[str, Any]) -> None:
+async def _sanitize_existing_state(agent: CompiledStateGraph, config: dict[str, Any]) -> None:
     """清理 agent 现有 state 中孤立的 ToolMessage"""
     try:
-        state = agent.get_state(config)
+        state = await agent.aget_state(config)
         if state is None or not state.values:
             return
         messages = state.values.get("messages", [])
@@ -483,7 +530,7 @@ def _sanitize_existing_state(agent: CompiledStateGraph, config: dict[str, Any]) 
             return
         cleaned = _sanitize_tool_messages(list(messages))
         if len(cleaned) != len(messages):
-            agent.update_state(config, {"messages": cleaned})
+            await agent.aupdate_state(config, {"messages": cleaned})
             log.info(f"已清理 state 中孤立的 ToolMessage: {len(messages)} → {len(cleaned)}")
     except Exception as e:
         log.warning(f"清理现有 state 失败: {e}")
@@ -491,7 +538,7 @@ def _sanitize_existing_state(agent: CompiledStateGraph, config: dict[str, Any]) 
 
 # ========== 上下文治理 ==========
 
-def _govern_context(agent: CompiledStateGraph, config: dict[str, Any],
+async def _govern_context(agent: CompiledStateGraph, config: dict[str, Any],
                     session_id: str = "", username: str = "") -> None:
     """上下文治理：压工具输出 → 超预算则滚动摘要 → 更新 state。
 
@@ -516,7 +563,7 @@ def _govern_context(agent: CompiledStateGraph, config: dict[str, Any],
 
         budget: int = max(2000, int(getattr(cfg, "contextCharBudget", 60000) or 60000))
 
-        state = agent.get_state(config)
+        state = await agent.aget_state(config)
         if state is None or not state.values:
             return
         messages: list[Any] = list(state.values.get("messages", []))
@@ -547,10 +594,10 @@ def _govern_context(agent: CompiledStateGraph, config: dict[str, Any],
                 try:
                     from src.agent.main_agent import get_model
 
-                    prev: str = SessionDao.get_summary(session_id, username) if session_id else ""
-                    new_summary: str = summarize(get_model(), old, prev_summary=prev)
+                    prev: str = await SessionDao.get_summary(session_id, username) if session_id else ""
+                    new_summary: str = await summarize(get_model(), old, prev_summary=prev)
                     if session_id:
-                        SessionDao.save_summary(session_id, new_summary[:SUMMARY_MAX_CHARS], username)
+                        await SessionDao.save_summary(session_id, new_summary[:SUMMARY_MAX_CHARS], username)
                     log.info(
                         f"上下文摘要完成: 旧消息 {len(old)} 条（{total_chars(old)} 字符）→ "
                         f"摘要 {len(new_summary)} 字符；保留 {len(keep)} 条"
@@ -569,7 +616,7 @@ def _govern_context(agent: CompiledStateGraph, config: dict[str, Any],
                         )
 
         if changed:
-            agent.update_state(config, {"messages": messages})
+            await agent.aupdate_state(config, {"messages": messages})
             log.info(
                 f"上下文治理: {before_len} 条/{before_chars} 字符 → "
                 f"{len(messages)} 条/{total_chars(messages)} 字符（预算 {budget}）"
@@ -611,7 +658,7 @@ def _parse_excel_file(file_path: str) -> str:
 
 # ========== 流式主流程 ==========
 
-def _extract_pending_interrupt(agent: CompiledStateGraph, config: dict[str, Any]) -> dict | None:
+async def _extract_pending_interrupt(agent: CompiledStateGraph, config: dict[str, Any]) -> dict | None:
     """从 checkpointer 中提取 pending 的 ask_user interrupt 请求。
 
     ask_user 工具内部调用 interrupt() 后，GraphInterrupt 会把值持久化到
@@ -621,7 +668,7 @@ def _extract_pending_interrupt(agent: CompiledStateGraph, config: dict[str, Any]
     返回 interrupt value dict，无 pending interrupt 时返回 None。
     """
     try:
-        state = agent.get_state(config)
+        state = await agent.aget_state(config)
         if state is None:
             return None
         for task in getattr(state, "tasks", ()) or ():
@@ -670,7 +717,7 @@ def invalidate_sandbox_files_hint(username: str) -> None:
         pass
 
 
-def _sandbox_files_hint(username: str, message: str = "") -> str:
+async def _sandbox_files_hint(username: str, message: str = "") -> str:
     """列出用户沙箱 /sandbox 根目录的文件，给模型一个"到底有没有附件"的确定事实
 
     背景（评测 q08a/q08b 行为矛盾）：上传文件落在 /sandbox/<原名>，但只有上传当轮会提示，
@@ -694,7 +741,7 @@ def _sandbox_files_hint(username: str, message: str = "") -> str:
 
             if not getattr(sandbox_manager, "enabled", False):
                 return ""
-            res = sandbox_manager.exec(
+            res = await sandbox_manager.aexec(
                 username,
                 # 根目录 + upload/（上传落点早改成 /sandbox/upload/ 了，
                 # 只看根目录会永远得到"空清单"，模型据此认为没有附件）
@@ -728,7 +775,7 @@ def _sandbox_files_hint(username: str, message: str = "") -> str:
         return ""
 
 
-def _has_pending_interrupt(agent: CompiledStateGraph, config: dict[str, Any]) -> bool:
+async def _has_pending_interrupt(agent: CompiledStateGraph, config: dict[str, Any]) -> bool:
     """这条线程是否停在某个 interrupt（人工确认）上
 
     为什么要问：刷新页面后历史消息里的选项按钮仍可点，但那次早就答过了。再 resume
@@ -737,14 +784,14 @@ def _has_pending_interrupt(agent: CompiledStateGraph, config: dict[str, Any]) ->
     查询失败时**放行**——宁可多跑一次，也别把正常的恢复挡死。
     """
     try:
-        snap = agent.get_state(config)
+        snap = await agent.aget_state(config)
         return bool(getattr(snap, "next", None))
     except Exception as e:
         log.warning(f"查询中断状态失败（放行 resume）: {e}")
         return True
 
 
-def process_chat_stream(session_id: str, username: str, message: str,
+async def process_chat_stream(session_id: str, username: str, message: str,
                         resume_value: str | list[str] | None = None) -> Generator[str, None, None]:
     """对外入口：绑定/还原「当前用户」上下文后，委托给 _process_chat_stream
 
@@ -756,12 +803,13 @@ def process_chat_stream(session_id: str, username: str, message: str,
 
     token = set_sandbox_user(username)
     try:
-        yield from _process_chat_stream(session_id, username, message, resume_value)
+        async for _chunk in _process_chat_stream(session_id, username, message, resume_value):
+            yield _chunk
     finally:
         reset_sandbox_user(token)
 
 
-def _process_chat_stream(session_id: str, username: str, message: str,
+async def _process_chat_stream(session_id: str, username: str, message: str,
                          resume_value: str | list[str] | None = None) -> Generator[str, None, None]:
     """流式处理聊天，通过 SSE 逐块返回 LLM 生成内容。
 
@@ -773,7 +821,7 @@ def _process_chat_stream(session_id: str, username: str, message: str,
     from src.infra.Timing import Marks
 
     _mk = Marks(f"session={session_id[:12]}")
-    chat_session = SessionDao.get_or_create_session(session_id, username)
+    chat_session = await SessionDao.get_or_create_session(session_id, username)
     _mk.mark("① 会话 get_or_create")
     log.info(f"会话(stream): <{session_id}>, 用户: <{username}>, resume={bool(resume_value)}")
     log.info(f"用户输入: {message}")
@@ -802,12 +850,14 @@ def _process_chat_stream(session_id: str, username: str, message: str,
         else:
             user_msg_content = str(resume_value)
     if user_msg_content:
-        MessageDao.create_message(chat_session.id, "user", user_msg_content)
+        # 独立 session（原因见 _finish 处注释）：流式写入不与请求级 session 共用
+        async with session_scope():
+            await MessageDao.create_message(chat_session.id, "user", user_msg_content)
     _mk.mark("② 用户消息入库")
 
     try:
         # ③ 获取 agent
-        agent: CompiledStateGraph = create_agent(session_id, username)
+        agent: CompiledStateGraph = await create_agent(session_id, username)
         _mk.mark("③ 构建 agent（含缓存命中/构建）")
 
         # ③ thread_id 隔离（checkpointer 持久化，历史由 PostgresSaver 自动恢复）
@@ -818,7 +868,7 @@ def _process_chat_stream(session_id: str, username: str, message: str,
             # 但**必须先确认这条线程真的停在人工确认点**：刷新页面后历史消息里的
             # 选项按钮是可点的，那时早就答过了；不校验就等于把同一个选择再喂一遍
             # （白跑一轮，若后面的工具是写操作还会重复执行）。
-            if not _has_pending_interrupt(agent, config):
+            if not await _has_pending_interrupt(agent, config):
                 _done_msg: str = "这个选项已经处理过了（当前没有待确认的选项），请重新发起请求。"
                 log.warning(f"忽略无效的 resume：线程无待确认中断 | session={session_id}, user={username}")
                 yield f"data: {json.dumps({'error': _done_msg}, ensure_ascii=False)}\n\n"
@@ -829,7 +879,7 @@ def _process_chat_stream(session_id: str, username: str, message: str,
         else:
             # 常规路径：构建新消息输入
             # 提取上下文前缀，防止模型多轮遗忘关键参数
-            context_prefix: str = _build_context_prefix(agent, config, session_id, username)
+            context_prefix: str = await _build_context_prefix(agent, config, session_id, username)
             _mk.mark("④ 上下文前缀")
 
             # 轨迹：本轮注入的上下文（系统提示 + 偏好 + 知识 + 文件清单的合成）
@@ -851,7 +901,7 @@ def _process_chat_stream(session_id: str, username: str, message: str,
             # 不触发该钩子（日志证实），方案不可行，已回退。
             # 历史消息里旧偏好仍会生效的问题，用"版本号 + 只认最新"约束解决。
             _injected: list[str] = []      # 轨迹：本轮注入了哪些上下文
-            _sb_hint: str = _sandbox_files_hint(username, message)
+            _sb_hint: str = await _sandbox_files_hint(username, message)
             _mk.mark("⑤ 沙箱文件清单")
             if _sb_hint:
                 agent_message = f"{agent_message}\n\n{_sb_hint}"
@@ -908,8 +958,8 @@ def _process_chat_stream(session_id: str, username: str, message: str,
             from langchain_core.messages import HumanMessage as _HM2
             input_payload = {"messages": [_HM2(content=agent_message)]}
             # 清理现有 state 中孤立的 ToolMessage（summarization 中间件可能破坏配对关系）
-            _sanitize_existing_state(agent, config)
-            state_before = agent.get_state(config)
+            await _sanitize_existing_state(agent, config)
+            state_before = await agent.aget_state(config)
             history_count = len(state_before.values.get("messages", [])) if (state_before and state_before.values) else 0
             log.info(f"=== 发送给模型(stream) | 历史消息数={history_count}, 新增消息({len(agent_message)}字符) ===\n{agent_message}")
 
@@ -966,7 +1016,7 @@ def _process_chat_stream(session_id: str, username: str, message: str,
             if nav_message:
                 yield f"data: {json.dumps({'content': nav_message}, ensure_ascii=False)}\n\n"
 
-        def _stream_once(state: dict) -> Generator[str, None, None]:
+        async def _stream_once(state: dict) -> AsyncGenerator[str, None]:
             """消费一轮 agent 流：yield SSE 事件，统计写回 state
 
             抽成独立函数是为了支持「空回复自动重试」（见下方 while）。
@@ -976,7 +1026,7 @@ def _process_chat_stream(session_id: str, username: str, message: str,
             skip_message: bool = False
             _ttft_done: bool = False
 
-            for chunk in agent.stream(
+            async for chunk in agent.astream(
                 input_payload,
                 config=config,
                 stream_mode="messages"
@@ -1068,7 +1118,7 @@ def _process_chat_stream(session_id: str, username: str, message: str,
                             _tr_status = "fail" if str(getattr(msg, "status", "") or "") == "error" else "ok"
                             if "已取消写入" in (_content or "") or "参数错误" in (_content or ""):
                                 _tr_status = "denied"
-                            TraceService.record(
+                            await asyncio.to_thread(TraceService.record, 
                                 username=username, session_id=session_id, kind="tool",
                                 name=str(_info.get("name") or _tid),
                                 args=_info.get("args", ""), result=_content,
@@ -1085,7 +1135,8 @@ def _process_chat_stream(session_id: str, username: str, message: str,
                             "elapsed": _tool_elapsed,
                             "detail": _tool_detail(str(_info.get("args", ""))),
                         }})
-                    yield from _try_emit_navigation(_extract_tool_content(msg))
+                    for _chunk in _try_emit_navigation(_extract_tool_content(msg)):
+                        yield _chunk
                     continue
 
                 # 思考内容（DeepSeek 等模型的 reasoning_content，在 additional_kwargs 里）
@@ -1183,7 +1234,8 @@ def _process_chat_stream(session_id: str, username: str, message: str,
                     state["text"] = state.get("text", "") + content
                     yield f"data: {json.dumps({'content': content}, ensure_ascii=False)}\n\n"
 
-        yield from _stream_once(acc)
+        async for _chunk in _stream_once(acc):
+            yield _chunk
         full_response: str = acc.get("text", "")
         tools_used: bool = bool(acc.get("tools"))
 
@@ -1201,7 +1253,8 @@ def _process_chat_stream(session_id: str, username: str, message: str,
             # 重试 = 重新生成：先通知前端清空已展示的思考/步骤，避免两轮内容堆在一起
             yield _sse({"reset": True})
             acc = {"text": "", "tools": False, "chunks": 0, "reasoning": 0}
-            yield from _stream_once(acc)
+            async for _chunk in _stream_once(acc):
+                yield _chunk
             full_response = acc.get("text", "")
             tools_used = bool(acc.get("tools"))
 
@@ -1231,7 +1284,7 @@ def _process_chat_stream(session_id: str, username: str, message: str,
         # interrupt 时 agent 暂停执行：发送 options 事件让前端渲染选项按钮。
         # 但会话已经创建、用户消息已入库，且 agent 的 question 文字也应持久化，
         # 否则刷新页面后 AI 回复丢失、新会话也不进左侧列表。
-        pending = _extract_pending_interrupt(agent, config)
+        pending = await _extract_pending_interrupt(agent, config)
         if pending:
             opt_question = str(pending.get("question", "")).strip()
             opt_options = [str(o).strip() for o in pending.get("options", []) if str(o).strip()]
@@ -1246,11 +1299,16 @@ def _process_chat_stream(session_id: str, username: str, message: str,
                 {"question": opt_question, "options": opt_options},
                 ensure_ascii=False,
             ) if opt_options else None
-            MessageDao.create_message(chat_session.id, "agent", agent_reply, options=options_json)
-            SessionDao.update_session_time(chat_session)
+            # 独立 session：流式生成器跑在 StreamingResponse 的独立任务里，
+            # 与请求级 session 不在同一个 greenlet 上下文；高并发下共用会报
+            # `greenlet_spawn has not been called; can't call await_only() here`
+            # → 回复没落库（界面上看得到回复，刷新后丢失）。
+            async with session_scope():
+                await MessageDao.create_message(chat_session.id, "agent", agent_reply, options=options_json)
+                await SessionDao.update_session_time(chat_session)
 
             # 发 done 事件，让前端刷新侧边栏会话列表（新会话立即出现）
-            _finish_turn(acc, username, session_id, _turn_t0)
+            await _finish_turn(acc, username, session_id, _turn_t0)
             yield f"data: {json.dumps({'done': True, 'session_id': session_id}, ensure_ascii=False)}\n\n"
             return
 
@@ -1318,7 +1376,7 @@ def _process_chat_stream(session_id: str, username: str, message: str,
             # 却照样跑一遍 find（5~10 秒），done 因此被推迟，前端就一直转圈。
             _used_tools: bool = bool(acc.get("trace_tools") or acc.get("tools"))
             if sandbox_manager.enabled and _used_tools:
-                _arts, _skipped = sandbox_manager.collect_artifacts(username, session_id)
+                _arts, _skipped = await sandbox_manager.acollect_artifacts(username, session_id)
             # 只展示「这一轮新产出/有变化」的，或「回复里确实提到了她」的文件，
             # 避免每轮都把历史文件重复贴一遍
             _show: list = [
@@ -1344,41 +1402,25 @@ def _process_chat_stream(session_id: str, username: str, message: str,
         # 代码在「点停止 / 断网 / worker 超时被杀」时永不执行 → 整轮回复永久丢失
         # （同步给用户的 _finish_turn 注释已经写明这个坑）。落库失败不影响本轮。
         try:
-            MessageDao.create_message(chat_session.id, "agent", full_response)
-            SessionDao.update_session_time(chat_session)
+            # 独立 session：流式生成器跑在 StreamingResponse 的独立任务里，
+            # 与请求级 session 不在同一个 greenlet 上下文；高并发下共用会报
+            # `greenlet_spawn has not been called; can't call await_only() here`
+            # → 回复没落库（界面上看得到回复，刷新后丢失）。
+            async with session_scope():
+                await MessageDao.create_message(chat_session.id, "agent", full_response)
+                await SessionDao.update_session_time(chat_session)
         except Exception as e:
             log.error(f"回复落库失败（回复已发出，不影响本轮）: session_id={session_id}, err={e}")
 
         # 本轮指标/trace 只在 _finish_turn 里记一次（这里原来还有一个 record_turn，
         # 每轮被统计了两遍，turns/tokens 全部翻倍）
-        _finish_turn(acc, username, session_id, _turn_t0)
+        # ⑥ 收尾治理挂成后台 task（放在 done 之前：done 之后生成器随时可能被关闭）
+        _spawn_post_turn(agent, config, session_id, username, acc)
+        await _finish_turn(acc, username, session_id, _turn_t0)
         yield f"data: {json.dumps({'done': True, 'session_id': session_id}, ensure_ascii=False)}\n\n"
 
         log.info(f"Agent 流式响应完成, 总长度={len(full_response)}")
 
-        # ⑥ 收尾（上下文治理 + 技能缓存清理）放**后台线程**：
-        #    done 已经发出、客户端也已解锁，继续挂在 HTTP 连接上只会白占一个 worker 线程
-        #    （治理里可能调一次模型做滚动摘要，几十秒）。
-        #    线程里不碰 Flask 请求上下文；DAO / checkpointer 各自建连接；失败只记日志。
-        def _post_turn() -> None:
-            try:
-                _govern_context(agent, config, session_id, username)
-            except Exception as e:
-                log.warning(f"上下文治理失败（忽略，下一轮还会再治理）: {e}")
-            try:
-                if acc.get("skills_touched"):
-                    from src.agent.main_agent import evict_agent_from_cache
-
-                    evict_agent_from_cache(session_id, username)
-                    log.info(f"技能目录有改动，已清理 agent 缓存（下一轮重新加载技能工具）: user={username}")
-            except Exception as e:
-                log.warning(f"清理 agent 缓存失败（技能工具需新会话生效）: {e}")
-
-        threading.Thread(
-            target=_post_turn,
-            name=f"post-turn-{(session_id or '')[:8]}",
-            daemon=True,
-        ).start()
 
 
     except HallucinationLoopError as e:
@@ -1391,7 +1433,7 @@ def _process_chat_stream(session_id: str, username: str, message: str,
             "3. 如果问题持续，请联系管理员"
         )
         yield f"data: {json.dumps({'content': user_msg}, ensure_ascii=False)}\n\n"
-        _finish_turn(acc, username, session_id, _turn_t0)
+        await _finish_turn(acc, username, session_id, _turn_t0)
         yield f"data: {json.dumps({'done': True, 'session_id': session_id}, ensure_ascii=False)}\n\n"
     except Exception as e:
         log.error(f"流式处理失败: {e}", exc_info=True)
@@ -1491,7 +1533,7 @@ def is_skill_file(file_path: str, original_name: str = "") -> bool:
     return name == "skill.md" or name.endswith(".skill.md")
 
 
-def _handle_skill_upload(session_id: str, username: str, file_path: str,
+async def _handle_skill_upload(session_id: str, username: str, file_path: str,
                          display_name: str) -> Generator[str, None, None]:
     """技能包上传：安全审计 → 装进该用户沙箱的技能目录 → 告知结果
 
@@ -1546,9 +1588,9 @@ def _handle_skill_upload(session_id: str, username: str, file_path: str,
         skill_dir: str = f"/sandbox/skills/{skill_name}"
         remote_path: str = f"{skill_dir}/SKILL.md"
         # 先建目录（CLI upload 不会自动创建多级目录）
-        sandbox_manager.exec(username, f"mkdir -p {shlex.quote(skill_dir)}")
+        await sandbox_manager.aexec(username, f"mkdir -p {shlex.quote(skill_dir)}")
 
-        if not sandbox_manager.upload(username, file_path, remote_path):
+        if not await sandbox_manager.aupload(username, file_path, remote_path):
             yield _emit("❌ 技能包写入你的沙箱失败，请稍后重试。")
             yield _emit("", done=True)
             return
@@ -1589,7 +1631,7 @@ def _handle_skill_upload(session_id: str, username: str, file_path: str,
 
 # ========== 文件上传流式处理（图片 + Excel） ==========
 
-def process_upload_stream(session_id: str, username: str, file_path: str,
+async def process_upload_stream(session_id: str, username: str, file_path: str,
                           message: str = "",
                           original_name: str = "") -> Generator[str, None, None]:
     """文件上传流式处理，通过 SSE 实时返回 Agent 处理进度
@@ -1616,8 +1658,8 @@ def process_upload_stream(session_id: str, username: str, file_path: str,
         from src.agent.backends.sandbox import sandbox_manager
         if sandbox_manager.enabled:
             # 先建目录（CLI upload 不会自动创建多级目录，缺目录会静默失败落到根）
-            sandbox_manager.exec(username, "mkdir -p /sandbox/upload")
-            if sandbox_manager.upload(username, file_path, f"/sandbox/upload/{display_name}"):
+            await sandbox_manager.aexec(username, "mkdir -p /sandbox/upload")
+            if await sandbox_manager.aupload(username, file_path, f"/sandbox/upload/{display_name}"):
                 sandbox_path = f"/sandbox/upload/{display_name}"
                 # 刚传进去的文件必须立刻出现在给模型的清单里（缓存否则要等 TTL）
                 invalidate_sandbox_files_hint(username)
@@ -1638,13 +1680,14 @@ def process_upload_stream(session_id: str, username: str, file_path: str,
     # —— 技能包（SKILL.md）：审计通过后装进本人沙箱的技能目录 ——
     if is_skill_file(file_path, display_name):
         log.info(f"技能包上传处理: user={username}, file={display_name}")
-        yield from _handle_skill_upload(session_id, username, file_path, display_name)
+        async for _chunk in _handle_skill_upload(session_id, username, file_path, display_name):
+            yield _chunk
         return
 
     # —— 图片：服务端预 OCR ——
     if is_image_file(file_path):
         log.info(f"图片上传处理(stream+ocr), file={file_path}")
-        ocr_text: str | None = _ocr_image(file_path)
+        ocr_text: str | None = await asyncio.to_thread(_ocr_image, file_path)
         if ocr_text:
             if message:
                 user_message = (
@@ -1670,10 +1713,11 @@ def process_upload_stream(session_id: str, username: str, file_path: str,
                 f"3. 发送文字描述，我可以帮你处理"
             )
             yield f"data: {json.dumps({'content': error_msg}, ensure_ascii=False)}\n\n"
-            _finish_turn(acc, username, session_id, _turn_t0)
+            await _finish_turn(acc, username, session_id, _turn_t0)
             yield f"data: {json.dumps({'done': True, 'session_id': session_id}, ensure_ascii=False)}\n\n"
             return
-        yield from process_chat_stream(session_id, username, user_message)
+        async for _chunk in process_chat_stream(session_id, username, user_message):
+            yield _chunk
         return
 
     # —— 非表格文件（txt/md/csv/pdf/docx/zip…）：**不解析**，交给沙箱工具处理 ——
@@ -1688,18 +1732,19 @@ def process_upload_stream(session_id: str, username: str, file_path: str,
             + "请先用 sandbox_shell 看一下它的类型/大小/内容（例如 `file`、`ls -l`、"
               "`head -c 2000`、`unzip -l`、`pdftotext`），再按用户的要求处理。"
         )
-        yield from process_chat_stream(session_id, username, _msg)
+        async for _chunk in process_chat_stream(session_id, username, _msg):
+            yield _chunk
         return
 
     # —— Excel：服务端 pandas 解析 ——
     try:
-        json_output: str = _parse_excel_file(file_path)
+        json_output: str = await asyncio.to_thread(_parse_excel_file, file_path)
         parsed_data: dict = json.loads(json_output)
 
         if "error" in parsed_data:
             error_msg = f"Excel 解析出错: {parsed_data['error']}"
             yield f"data: {json.dumps({'error': error_msg}, ensure_ascii=False)}\n\n"
-            _finish_turn(acc, username, session_id, _turn_t0)
+            await _finish_turn(acc, username, session_id, _turn_t0)
             yield f"data: {json.dumps({'done': True, 'session_id': session_id}, ensure_ascii=False)}\n\n"
             return
 
@@ -1709,7 +1754,7 @@ def process_upload_stream(session_id: str, username: str, file_path: str,
 
         if row_count == 0:
             yield f"data: {json.dumps({'error': 'Excel 文件中没有数据。'}, ensure_ascii=False)}\n\n"
-            _finish_turn(acc, username, session_id, _turn_t0)
+            await _finish_turn(acc, username, session_id, _turn_t0)
             yield f"data: {json.dumps({'done': True, 'session_id': session_id}, ensure_ascii=False)}\n\n"
             return
 
@@ -1727,15 +1772,16 @@ def process_upload_stream(session_id: str, username: str, file_path: str,
             user_message = f"{summary}\n请根据以上 Excel 数据，帮我对信息进行处理，请先展示解析结果让我确认。{sandbox_hint}"
 
         log.info(f"Excel 上传处理(stream), file={file_path}, rows={row_count}")
-        yield from process_chat_stream(session_id, username, user_message)
+        async for _chunk in process_chat_stream(session_id, username, user_message):
+            yield _chunk
 
     except json.JSONDecodeError as e:
         log.error(f"Excel 解析 JSON 错误: {e}")
         yield f"data: {json.dumps({'error': 'Excel 文件解析失败，请检查文件格式。'}, ensure_ascii=False)}\n\n"
-        _finish_turn(acc, username, session_id, _turn_t0)
+        await _finish_turn(acc, username, session_id, _turn_t0)
         yield f"data: {json.dumps({'done': True, 'session_id': session_id}, ensure_ascii=False)}\n\n"
     except Exception as e:
         log.error(f"文件上传处理失败: {e}", exc_info=True)
         yield f"data: {json.dumps({'error': _safe_error_str(e)}, ensure_ascii=False)}\n\n"
-        _finish_turn(acc, username, session_id, _turn_t0)
+        await _finish_turn(acc, username, session_id, _turn_t0)
         yield f"data: {json.dumps({'done': True, 'session_id': session_id}, ensure_ascii=False)}\n\n"

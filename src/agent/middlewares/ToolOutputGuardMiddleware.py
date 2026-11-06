@@ -12,6 +12,7 @@
 注意：这是"降低风险"，不是"绝对防住"。模型仍然可能被绕过，真正的高危写操作要靠权限与人工确认。
 """
 import re
+from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
 from langchain_core.messages import ToolMessage
@@ -79,12 +80,8 @@ def guard_text(text: str, tool_name: str = "") -> tuple[str, list[str]]:
 class ToolOutputGuardMiddleware(AgentMiddleware):
     """对所有工具调用的返回值统一加边界与检测"""
 
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler,
-    ) -> ToolMessage | Command:
-        result = handler(request)
+    def _after(self, request: ToolCallRequest, result: Any) -> Any:
+        """工具输出边界与注入特征检测（同步/异步共用）"""
         tool_name = str((request.tool_call or {}).get("name") or "")
 
         try:
@@ -102,3 +99,18 @@ class ToolOutputGuardMiddleware(AgentMiddleware):
             log.warning(f"工具输出防护异常(已跳过) tool={tool_name}: {exc}")
 
         return result
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler,
+    ) -> ToolMessage | Command:
+        return self._after(request, handler(request))
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler,
+    ) -> ToolMessage | Command:
+        # astream 路径：基类没有 awrap_tool_call 的默认实现
+        return self._after(request, await handler(request))

@@ -3,7 +3,7 @@ Agent 服务模块
 负责 LLM 模型管理、deep agent 创建和缓存生命周期管理
 
 安全设计：不注入 LocalShellBackend，agent 只能使用 tools/ 中定义的
-若干内置 tool（ask_user / sandbox_shell / 记忆读写）+ 插件里声明的业务工具，
+若干内置 tool（ask_user / sandbox_shell / 记忆读写）+ 插件里的业务工具，
 无宿主机文件系统访问和宿主机 shell 执行能力（文件与命令只能落进用户的隔离沙箱）。
 图片 OCR 由服务端预处理后传给 agent，无需 agent 自行调用 OCR 工具。
 TODO: 升级 langgraph >= 1.3 以支持 stream_events(version="v3") 流式协议，
@@ -49,6 +49,11 @@ class _NoOpSummarizationMiddleware(AgentMiddleware):
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
         return handler(request)
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        # astream/ainvoke 走这条：LangGraph 的中间件基类对 wrap_model_call
+        # 有同步默认实现，但异步版本没有默认实现，只写同步版会直接 NotImplementedError
+        return await handler(request)
 
 
 _summarization_mod.SummarizationMiddleware = _NoOpSummarizationMiddleware
@@ -154,7 +159,8 @@ class AgentManager:
     """
 
     def __init__(self) -> None:
-        self._checkpointer: PostgresSaver = get_checkpointer()
+        # checkpointer 由 lifespan 里的 init_async 创建；这里**不能**在 import 期取，
+        # 否则模块级单例（_agent_manager = AgentManager()）一 import 就抛错。走下面的属性懒取。
         self._cache: OrderedDict[str, CompiledStateGraph] = OrderedDict()
         self._cache_lock: threading.Lock = threading.Lock()
         self._cache_max: int = 128
@@ -169,7 +175,12 @@ class AgentManager:
             request_timeout=120,
         )
 
-    def create_agent(self, session_id: str, username: str) -> CompiledStateGraph:
+    @property
+    def _checkpointer(self):
+        """懒获取 AsyncPostgresSaver（由 lifespan 初始化）"""
+        return get_checkpointer()
+
+    async def create_agent(self, session_id: str, username: str) -> CompiledStateGraph:
         """创建或从缓存获取 deep agent 实例
 
         - 仅注入 7 个业务 tool，不注入文件系统/shell 工具（无 LocalShellBackend）
@@ -252,7 +263,7 @@ class AgentManager:
                 # 技能多了能省一大截提示词；读技能后由 ChatService 清缓存，下一轮工具才出现。
                 only: set[str] | None = None
                 if bool(getattr(cfg, "skillToolsLazy", False)):
-                    only = self._read_skills_in_session(session_id, username)
+                    only = await self._read_skills_in_session(session_id, username)
                 _skill_tools = load_skill_tools(username, only_skills=only)
                 _mk.mark("a3 技能工具加载")
                 if only is not None:
@@ -346,7 +357,7 @@ class AgentManager:
 
         return agent
 
-    def _read_skills_in_session(self, session_id: str, username: str) -> set[str] | None:
+    async def _read_skills_in_session(self, session_id: str, username: str) -> set[str] | None:
         """本会话读过哪些技能的 SKILL.md（按需披露用）
 
         判断依据：会话消息里 read_file / sandbox_shell 的工具调用参数中出现
@@ -355,7 +366,7 @@ class AgentManager:
         """
         try:
             thread_id: str = f"{session_id}_{username}"
-            tup = self._checkpointer.get_tuple({"configurable": {"thread_id": thread_id}})
+            tup = await self._checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
             if not tup:
                 return set()
             values: dict = (getattr(tup, "checkpoint", None) or {}).get("channel_values", {}) or {}
@@ -410,7 +421,7 @@ class AgentManager:
         self._broadcast()
         return removed
 
-    def delete_thread(self, session_id: str, username: str) -> bool:
+    async def delete_thread(self, session_id: str, username: str) -> bool:
         """删除指定会话在 checkpointer（PostgreSQL）中的所有 checkpoint 和 writes。
 
         thread_id 规则与 ChatService 一致：<session_id>_<username>。
@@ -418,7 +429,7 @@ class AgentManager:
         """
         thread_id: str = f"{session_id}_{username}"
         try:
-            self._checkpointer.delete_thread(thread_id)
+            await self._checkpointer.adelete_thread(thread_id)
             log.info(f"checkpoint 已删除: thread_id=<{thread_id}>")
             return True
         except Exception as e:
@@ -436,8 +447,8 @@ def get_model():
     return _agent_manager._model
 
 
-def create_agent(session_id: str, username: str) -> CompiledStateGraph:
-    return _agent_manager.create_agent(session_id, username)
+async def create_agent(session_id: str, username: str) -> CompiledStateGraph:
+    return await _agent_manager.create_agent(session_id, username)
 
 
 def evict_agent_from_cache(session_id: str, username: str) -> bool:
@@ -481,8 +492,8 @@ def evict_agent_cache_by_user(username: str) -> int:
     return removed
 
 
-def delete_thread(session_id: str, username: str) -> bool:
-    return _agent_manager.delete_thread(session_id, username)
+async def delete_thread(session_id: str, username: str) -> bool:
+    return await _agent_manager.delete_thread(session_id, username)
 
 
 # ---------------------------------------------------------------------------
