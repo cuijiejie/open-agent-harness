@@ -561,6 +561,38 @@ class RbacService:
         self._status_cache[user] = (now, status)
         return status in ("disabled", "deleted")
 
+    def is_last_active_admin(self, username: str) -> bool:
+        """该用户是否是「最后一个启用中的管理员」
+
+        停用账号的接口必须在写库前调用它：否则管理员可以把自己（或唯一另一个
+        管理员）停用，之后系统再没有人能进用户/角色管理，只能改库救场。
+        查询失败按 False 处理（不阻断正常运维），删除用户那条路径已有同样的兜底。
+        """
+        user: str = (username or "").strip()
+        if not user:
+            return False
+        try:
+            self.ensure_schema()
+            with self._conn() as c, c.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM pa_user_roles u JOIN pa_roles r "
+                    "ON r.role_code=u.role_code WHERE u.username=%s AND r.is_admin=1",
+                    (user,),
+                )
+                if int(cur.fetchone()[0] or 0) == 0:
+                    return False
+                cur.execute(
+                    "SELECT COUNT(DISTINCT pu.username) FROM pa_users pu "
+                    "JOIN pa_user_roles u ON u.username=pu.username "
+                    "JOIN pa_roles r ON r.role_code=u.role_code "
+                    "WHERE r.is_admin=1 AND pu.status='active' AND pu.username<>%s",
+                    (user,),
+                )
+                return int(cur.fetchone()[0] or 0) == 0
+        except Exception as e:
+            log.warning(f"判断最后管理员失败（按否处理）: user={user}, err={e}")
+            return False
+
     def set_status(self, username: str, status: str) -> bool:
         """启用/停用。停用后该账号无法登录，已登录的接口请求也会被 403 拦下。"""
         user: str = (username or "").strip()
@@ -727,6 +759,9 @@ class RbacService:
         user: str = (username or "").strip()
         if not user:
             return {"ok": False, "error": "域账号不能为空"}
+        if len(user) > 64 or "/" in user or "\\" in user or ".." in user \
+                or any(ord(ch) < 32 for ch in user):
+            return {"ok": False, "error": "账号不合法（不能含路径分隔符/..，长度 ≤64）"}
         self.ensure_schema()
         try:
             with self._conn() as c, c.cursor() as cur:

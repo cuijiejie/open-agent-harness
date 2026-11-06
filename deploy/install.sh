@@ -115,7 +115,7 @@ else
     echo "PA_DB_MYSQL_DB=$MYSQL_DB"
     echo "PA_LLM_DEEPSEEK_API_KEY=$LLM_KEY"
     echo "PA_APP_SECRET_KEY=$SECRET"
-    echo "PA_APP_TEST_LOGIN_ENABLED=${PA_APP_TEST_LOGIN_ENABLED:-true}"
+    echo "PA_APP_TEST_LOGIN_ENABLED=${PA_APP_TEST_LOGIN_ENABLED:-false}"
     echo "PA_OPENSHELL_ENABLED=${PA_OPENSHELL_ENABLED:-false}"
   } > .env
   ok "已生成 .env"

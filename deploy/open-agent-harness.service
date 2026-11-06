@@ -17,7 +17,8 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/open-agent-harness
 ExecStart=/opt/open-agent-harness/.venv/bin/python -m uvicorn \
   src.app_fastapi:app \
-  --host 0.0.0.0 --port 5001 --workers 4
+  --host 0.0.0.0 --port 5001 --workers 4 \
+  --no-server-header
 
 Restart=always
 RestartSec=5

@@ -805,6 +805,13 @@ async def process_chat_stream(session_id: str, username: str, message: str,
     try:
         async for _chunk in _process_chat_stream(session_id, username, message, resume_value):
             yield _chunk
+    except Exception as e:
+        # 兜底：建会话/落库/取 agent 等**首次 yield 之前**的异常以前会直接把 SSE 连接掐断，
+        # 前端只看到 "network error"。这里统一转成协议内的 error+done。
+        log.error(f"对话流未捕获异常: session={session_id}, user={username}, "
+                  f"{type(e).__name__}: {e}", exc_info=True)
+        yield f"data: {json.dumps({'error': _safe_error_str(e)}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'done': True, 'session_id': session_id}, ensure_ascii=False)}\n\n"
     finally:
         reset_sandbox_user(token)
 

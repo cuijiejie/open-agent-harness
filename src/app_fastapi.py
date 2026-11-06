@@ -47,6 +47,13 @@ async def lifespan(_app: FastAPI):
 
     await init_checkpointer_async()
     log.info(f"FastAPI 启动: prefix={PREFIX}, pid={os.getpid()}")
+    # 安全自检：这两项在生产暴露就是「任何人可当 admin」，必须显式告警
+    if not _need_password():
+        log.warning("安全警告：登录口令为空（[app] login_password / PA_APP_LOGIN_PASSWORD）——"
+                    "任何知道用户名（包括 admin）的人都能直接登录；对外提供服务前必须设置")
+    if cfg.testLoginEnabled:
+        log.warning("安全警告：[app] test_login_enabled=true —— /test-login 可用任意用户名免密登录；"
+                    "对外提供服务前必须设为 false")
     yield
     log.info(f"FastAPI 关闭: pid={os.getpid()}")
 
@@ -131,6 +138,9 @@ async def index(request: Request):
 
 @app.get(f"{PREFIX}/test.html")
 async def test_page():
+    """联调测试页：只在 test_login 开启（开发/测试环境）时暴露"""
+    if not cfg.testLoginEnabled:
+        return JSONResponse({"error": "未开启"}, status_code=404)
     return _serve("test.html")
 
 
@@ -160,6 +170,43 @@ async def current_user(username: str = Depends(require_login), request: Request 
 
 def _need_password() -> bool:
     return bool(str(getattr(cfg, "loginPassword", "") or "").strip())
+
+
+def _safe_next(nxt: str) -> str:
+    """只允许站内回跳，挡住 `next=https://evil` / `//evil` / `/\\evil` 这类开放重定向"""
+    raw: str = str(nxt or "").strip()
+    if not raw.startswith(PREFIX + "/"):
+        return f"{PREFIX}/"
+    if raw.startswith("//") or "\\" in raw or any(ord(ch) < 32 for ch in raw):
+        return f"{PREFIX}/"
+    return raw
+
+
+def _valid_username(username: str) -> bool:
+    """账号格式：1~64 字符，不含路径分隔符/控制字符（防 DB 脏数据与路径穿越）"""
+    u: str = str(username or "")
+    if not u or len(u) > 64:
+        return False
+    if "/" in u or "\\" in u or ".." in u:
+        return False
+    return not any(ord(ch) < 32 for ch in u)
+
+
+def _login_rate_limited(ip: str) -> bool:
+    """登录限速：同一 IP 每分钟最多 20 次（Redis 不可用/异常时放行）"""
+    try:
+        from src.infra.utils.RedisUtil import redis_util
+
+        if not redis_util.available:
+            return False
+        key: str = f"login:rate:{ip or '-'}"
+        c = redis_util._client
+        count = c.incr(key)
+        if count == 1:
+            c.expire(key, 60)
+        return int(count) > 20
+    except Exception:
+        return False
 
 
 def _render_login(error: str = "") -> str:
@@ -192,10 +239,17 @@ async def login_submit(request: Request):
     form = await request.form()
     username: str = str(form.get("username") or "").strip()
     password: str = str(form.get("password") or "")
-    nxt: str = str(request.query_params.get("next") or f"{PREFIX}/")
+    nxt: str = _safe_next(str(request.query_params.get("next") or f"{PREFIX}/"))
 
+    from src.web.http import client_ip
+
+    if _login_rate_limited(client_ip(request)):
+        log.warning(f"登录被限速: user={username}, ip={client_ip(request)}")
+        return HTMLResponse(_render_login("登录过于频繁，请稍后再试"), status_code=429)
     if not username:
         return HTMLResponse(_render_login("用户名不能为空"), status_code=400)
+    if not _valid_username(username):
+        return HTMLResponse(_render_login("用户名不合法（不能含 / \\ .. 或控制字符）"), status_code=400)
     if _need_password() and password != cfg.loginPassword:
         log.warning(f"登录失败（口令错误）: user={username}")
         return HTMLResponse(_render_login("用户名或口令不正确"), status_code=401)
@@ -236,6 +290,8 @@ async def test_login(request: Request):
         username = str(form.get("username") or "").strip()
     if not username:
         return JSONResponse({"error": "用户名不能为空"}, status_code=400)
+    if not _valid_username(username):
+        return JSONResponse({"error": "用户名不合法"}, status_code=400)
 
     from src.infra.RbacService import rbac
 

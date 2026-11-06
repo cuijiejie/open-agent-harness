@@ -49,8 +49,14 @@ def list_users_admin(request: Request, username: str = Depends(require_login)):
     qp = request.query_params
     keyword: str = str(qp.get("q") or "")
     role: str = str(qp.get("role") or "")
-    page: int = int(qp.get("page") or 1)
-    page_size: int = int(qp.get("page_size") or 10)
+    try:
+        page: int = max(1, int(qp.get("page") or 1))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size: int = max(1, min(100, int(qp.get("page_size") or 10)))
+    except (TypeError, ValueError):
+        page_size = 10
     paged: dict = rbac.page_users(keyword, role, page, page_size)
     return JSONResponse({
         "ok": True,
@@ -97,6 +103,10 @@ def set_user_status(target: str, payload: dict | None = Body(None),
     status: str = str((payload or {}).get("status") or "")
     if status not in ("active", "disabled"):
         return JSONResponse({"ok": False, "error": "status 只能是 active 或 disabled"}, status_code=400)
+    if status == "disabled" and rbac.is_last_active_admin(target):
+        return JSONResponse({"ok": False,
+                             "error": "这是最后一个启用中的管理员，停用会没人能管理系统设置"},
+                            status_code=400)
     if not rbac.set_status(target, status):
         return JSONResponse({"ok": False, "error": "写入失败（详见服务端日志）"}, status_code=500)
     try:
