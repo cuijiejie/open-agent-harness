@@ -16,42 +16,42 @@ if str(ROOT) not in sys.path:
 
 class TestBaseOf(unittest.TestCase):
     def test_plain_name(self):
-        from src.controller.PlatformSkillController import _base_of
+        from src.web.routers.platform_skill import _base_of
 
         self.assertEqual(_base_of("office-file-toolkit"), "office-file-toolkit")
 
     def test_versioned_name(self):
-        from src.controller.PlatformSkillController import _base_of
+        from src.web.routers.platform_skill import _base_of
 
         self.assertEqual(_base_of("office-file-toolkit-v2"), "office-file-toolkit")
         self.assertEqual(_base_of("office-file-toolkit-v17"), "office-file-toolkit")
 
     def test_name_ending_with_v_is_not_version(self):
         """尾部的 -v 但没有数字，不能当版本号（否则名字会被削掉）"""
-        from src.controller.PlatformSkillController import _base_of
+        from src.web.routers.platform_skill import _base_of
 
         self.assertEqual(_base_of("skill-v"), "skill-v")
 
     def test_empty(self):
-        from src.controller.PlatformSkillController import _base_of
+        from src.web.routers.platform_skill import _base_of
 
         self.assertEqual(_base_of(""), "")
 
 
 class TestVerOf(unittest.TestCase):
     def test_unversioned_is_1(self):
-        from src.controller.PlatformSkillController import _ver_of
+        from src.web.routers.platform_skill import _ver_of
 
         self.assertEqual(_ver_of("office-file-toolkit"), 1)
 
     def test_versioned(self):
-        from src.controller.PlatformSkillController import _ver_of
+        from src.web.routers.platform_skill import _ver_of
 
         self.assertEqual(_ver_of("office-file-toolkit-v2"), 2)
         self.assertEqual(_ver_of("office-file-toolkit-v10"), 10)
 
     def test_v_without_digit(self):
-        from src.controller.PlatformSkillController import _ver_of
+        from src.web.routers.platform_skill import _ver_of
 
         self.assertEqual(_ver_of("skill-v"), 1)
 
@@ -60,14 +60,14 @@ class TestSkillNameSafety(unittest.TestCase):
     """平台技能的路径都靠 _safe_name 挡穿越"""
 
     def test_rejects_traversal(self):
-        from src.controller.SkillController import _safe_name
+        from src.web.routers.skill import _safe_name
 
         for bad in ("../etc", "a/b", "..", "", "a\\b"):
             with self.assertRaises(ValueError, msg=f"{bad!r} 应该被拒"):
                 _safe_name(bad)
 
     def test_accepts_normal(self):
-        from src.controller.SkillController import _safe_name
+        from src.web.routers.skill import _safe_name
 
         for good in ("office-file-toolkit", "t-plat-abc123", "skill_v2"):
             self.assertEqual(_safe_name(good), good)
