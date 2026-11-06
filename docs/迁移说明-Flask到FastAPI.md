@@ -110,6 +110,34 @@ HEAD 还是若干天前的 `chore: initial open-source release`——它是**拷
 **修法**：新代码部署在**独立目录**（`/data1/oah-fastapi`，git worktree），
 只把 `config/`、`.env`、`frontend/dist` 从老目录拷过去；老目录原样保留。
 
+### 4.9 Redis 配错 = 限流/去重/权限缓存**全部静默降级**
+
+**现象**：一切"看起来正常"，但限流不生效、重复提交拦不住、权限每次都查库。
+日志里只有一行容易被忽略的 WARNING：
+
+```
+Redis 连接失败, 限流/去重降级为放行: SELECT is not allowed in cluster mode
+```
+
+**根因**：`configs.cfg` 写成单机模式（`redis_cluster = false`，`redis_host = 127.0.0.1`），
+但本机根本没有 Redis；真实环境是 **Redis Cluster**（`redis-1.internal/81/82:6379`）。
+单机客户端会发 `SELECT 0`，集群节点直接拒绝。
+
+**为什么"静默"**：`RedisUtil.available=False` 时，限流放行、去重放行、缓存返回 None，
+业务全部回落到数据库——功能不坏，只是**所有保护都关了**，而且不影响健康检查。
+
+**修法**：
+
+```ini
+redis_cluster = true
+redis_nodes = redis-1.internal:6379,redis-2.internal:6379,redis-3.internal:6379
+```
+
+改完重启，验证：`available: True` + 连发 31 次应第 31 次被限流拦下。
+
+> 教训：`RedisUtil` 降级是**为了不因缓存故障拖垮业务**，代价是故障无声。
+> 部署后务必主动确认一次 `available`，别只看接口 200。
+
 ---
 
 ## 5. 部署要点（容易漏的三样）
@@ -119,6 +147,7 @@ HEAD 还是若干天前的 `chore: initial open-source release`——它是**拷
 | `config/`（含 `configs.cfg`） | **不在 git 里**（或为空模板），必须从原部署目录拷。缺 `pg_pass` 起不来 |
 | `.env` | 模型 key、库密码等；systemd 用 `EnvironmentFile` 注入 |
 | `frontend/dist` | 前端构建产物，不进版本库；缺了首页 404 |
+| **Redis** | `redis_cluster = true` + 三个集群节点；配错不报错，只是**限流/去重/权限缓存全关** |
 
 **PostgreSQL 需要单独的库**（本例 `open_agent_harness`），checkpointer 会在首次启动时 `setup()` 建表。
 多 worker 并发首次建表可能撞 `UniqueViolation`，代码里有 3 次重试（幂等）。
@@ -138,7 +167,8 @@ worker 数：每个 worker 常驻约 300~400MB（含 langgraph 依赖），按�
 | 会话持久化 | 多轮对话后刷新 | 历史在（checkpointer 真落库） |
 | 静态资源 | 首页 + `assets/*.js` | 200 |
 | 未登录 | 匿名打 `/api/*` | 401 + `login_url` |
-| **未验证** | 沙箱异步命令 | 该部署 `openshell_enabled=false`，`aexec` 直接返回"沙箱功能未启用"。代码链路自洽但**没跑过真实命令** |
+| 沙箱异步命令 | `aexec`/`aupload`/`adownload`/`alist_artifacts` 对 `agent-yaoyue` 实测 | ✅ rc/截断/上传下载/产物清单全部通过（同步版 A/B 完全一致） |
+| Redis | `available` + 连发 31 次 | ✅ True；前 30 次放行、第 31 次被限流拦下 |
 
 ---
 
