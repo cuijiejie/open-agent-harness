@@ -6,7 +6,7 @@
 #   sudo APP_DIR=/srv/agent PORT=8080 bash deploy/install.sh
 #
 # 幂等：重复执行 = 升级（重装依赖、重建前端、重启服务）
-# 前置：python3.12、node 18+、npm、MySQL（PG/Redis/沙箱可选）
+# 前置：python3.12、node 18+、npm、MySQL、PostgreSQL（Redis/沙箱可选）
 # =============================================================================
 set -euo pipefail
 
@@ -99,6 +99,8 @@ if [ -f .env ]; then
   ok ".env 已存在，保留不动"
   SECRET=$(grep -E '^PA_APP_SECRET_KEY=' .env | cut -d= -f2- || true)
   [ -n "$SECRET" ] || warn "PA_APP_SECRET_KEY 为空，登录态会随机失效"
+  grep -qE '^PA_AGENT_PG_PASS=.+' .env \
+    || warn "PA_AGENT_PG_PASS 为空 —— PG 是启动必需项，服务会起不来"
 else
   SECRET=$("$PY" -c 'import secrets;print(secrets.token_hex(32))')
   MYSQL_PASS=${PA_DB_MYSQL_PASS:-}
@@ -117,10 +119,17 @@ else
     echo "PA_APP_SECRET_KEY=$SECRET"
     echo "PA_APP_TEST_LOGIN_ENABLED=${PA_APP_TEST_LOGIN_ENABLED:-false}"
     echo "PA_OPENSHELL_ENABLED=${PA_OPENSHELL_ENABLED:-false}"
+    # PG 是启动必需项（checkpointer），口令必须落进 .env，否则下次重启就连不上
+    echo "PA_AGENT_PG_HOST=${PA_AGENT_PG_HOST:-127.0.0.1}"
+    echo "PA_AGENT_PG_PORT=${PA_AGENT_PG_PORT:-5432}"
+    echo "PA_AGENT_PG_DB=${PA_AGENT_PG_DB:-open_agent_harness}"
+    echo "PA_AGENT_PG_USER=${PA_AGENT_PG_USER:-postgres}"
+    echo "PA_AGENT_PG_PASS=${PA_AGENT_PG_PASS:-}"
   } > .env
   ok "已生成 .env"
   [ -n "$MYSQL_PASS" ] || warn "PA_DB_MYSQL_PASS 为空 —— 请编辑 $APP_DIR/.env 填上数据库口令"
   [ -n "$LLM_KEY" ]    || warn "PA_LLM_DEEPSEEK_API_KEY 为空 —— 不填则对话不可用"
+  [ -n "${PA_AGENT_PG_PASS:-}" ] || warn "PA_AGENT_PG_PASS 为空 —— PG 连不上服务会启动失败（必需项）"
 fi
 chmod 600 .env
 mkdir -p logs
@@ -139,6 +148,22 @@ import pymysql
 pymysql.connect(host=cfg.mysqlHost, port=int(cfg.mysqlPort), user=cfg.mysqlUser,
                 password=cfg.mysqlPass, database=cfg.mysqlDB, connect_timeout=5).close()
 print("    数据库连接正常:", cfg.mysqlHost, cfg.mysqlDB)
+PY
+
+# PG 是启动必需项：连不上服务会直接退出（不是降级），所以这里提前给出明确提示
+.venv/bin/python - <<'PY' || warn "PG 连不上：服务启动会直接退出。先建库改口令（PA_AGENT_PG_PASS），再重跑本脚本"
+import os, sys
+sys.path.insert(0, ".")
+for line in open(".env", encoding="utf-8"):
+    line = line.strip()
+    if line and not line.startswith("#") and "=" in line:
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k, v)
+from config.Configs import cfg
+import psycopg
+psycopg.connect(host=cfg.pgHost, port=int(cfg.pgPort), dbname=cfg.pgDb,
+                user=cfg.pgUser, password=cfg.pgPass, connect_timeout=5).close()
+print("    PG 连接正常:", cfg.pgHost, cfg.pgDb)
 PY
 
 blue "6/7 安装 systemd 服务"

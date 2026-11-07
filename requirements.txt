@@ -1,4 +1,5 @@
 pymysql==1.1.2
+asyncmy==0.2.18      # SQLAlchemy 异步 MySQL 驱动（database.py 的 mysql+asyncmy）
 pydantic==2.13.4
 deepagents==0.5.2
 langgraph==1.1.6
@@ -11,3 +12,10 @@ pandas==2.2.3
 python-calamine==0.5.0
 sqlalchemy==2.0.49
 langchain-openai==1.1.13
+
+# Web 层（FastAPI 入口 src/app_fastapi.py）—— 原先漏了，全新环境装完起不来
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+jinja2==3.1.6       # 登录页模板
+itsdangerous==2.2.0 # 会话签名
+python-multipart==0.0.33  # 表单/文件上传

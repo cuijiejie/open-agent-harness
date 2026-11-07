@@ -16,12 +16,17 @@ SERVICE=${SERVICE:-open-agent-harness}
 SMOKE=${SMOKE:-0}
 
 cd "$APP_DIR" || { echo "找不到 APP_DIR=$APP_DIR"; exit 1; }
+
+# 单测会 import 到模块级构造的 LLM 客户端：没有 key 就直接 Missing credentials，
+# 看起来像"部署坏了"。验收脚本自己把 .env 载入（install.sh 建的 /opt 目录通常没有 .git）。
+if [ -f "$APP_DIR/.env" ]; then set -a; . "$APP_DIR/.env"; set +a; fi
+
 FAIL=0
 head() { printf '\n=== %s ===\n' "$*"; }
 bad()  { printf '  [FAIL] %s\n' "$*"; FAIL=1; }
 
 head "1) 服务状态"
-echo "head=$(git rev-parse --short HEAD) dirty=$(git status --porcelain | wc -l) active=$(systemctl is-active "$SERVICE")"
+echo "head=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) dirty=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ') active=$(systemctl is-active "$SERVICE")"
 [ "$(systemctl is-active "$SERVICE")" = "active" ] || bad "服务不是 active"
 
 head "2) 健康检查"
