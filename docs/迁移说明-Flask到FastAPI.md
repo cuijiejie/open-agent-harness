@@ -30,7 +30,7 @@
 | **P4** 流式 | `agent.astream` + `AsyncPostgresSaver`；14 个函数 async；24 处阻塞调用 `to_thread`；收尾治理从后台线程改后台 task | `src/chat/stream.py`、`src/agent/main_agent.py`、`src/infra/CheckpointerManager.py`、4 个中间件补 `awrap_*` |
 | **P5** 其余 IO | 沙箱双 API（`_acli/aexec/aupload/adownload/acollect_artifacts`）、`RedisUtil.aclient`、`CacheUtil.aget`、`rbac.ais_disabled` | `src/agent/backends/sandbox.py`、`src/infra/utils/*`、`src/infra/RbacService.py` |
 
-启动方式：`PYTHONPATH=. .venv/bin/python -m uvicorn src.app_fastapi:app --host 0.0.0.0 --port 5001 --workers 4`
+启动方式：`PYTHONPATH=. "$HOME/miniforge3/envs/oah/bin/python" -m uvicorn src.app_fastapi:app --host 0.0.0.0 --port 5001 --workers 3`
 
 ---
 
