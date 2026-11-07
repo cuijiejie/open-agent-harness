@@ -63,7 +63,7 @@ cd /opt/open-agent-harness && PYTHONPATH=. .venv/bin/python deploy/seed_admin.py
 ### 本地试跑
 
 ```bash
-# Python 环境用 Miniconda（部署机为 /opt/miniconda3/envs/oah），见 docs/Miniconda环境.md
+# Python 环境用 Miniforge（部署机为 /home/cuijie/miniforge3/envs/oah），见 docs/Conda环境.md
 conda create -y -n oah --override-channels -c conda-forge python=3.12
 conda activate oah
 pip install -r requirements.txt

@@ -19,15 +19,15 @@ SKIP_FRONTEND=${SKIP_FRONTEND:-0}
 
 # Python 环境：默认 venv；USE_CONDA=1 时用已有的 conda 环境（不新建 venv）
 # 选过 conda 的机器会把 PA_INSTALL_USE_CONDA=1 写进 .env，之后重跑无需再传
-CONDA_PREFIX_DIR=${CONDA_PREFIX_DIR:-/opt/miniconda3}
-CONDA_ENV=${CONDA_ENV:-oah}
+# 三个值都能从 .env 里读回（install.sh 自己写的标记），保证重跑时环境不漂移
+_env_get() { [ -f "$APP_DIR/.env" ] && grep -E "^$1=" "$APP_DIR/.env" | tail -1 | cut -d= -f2- || true; }
 if [ -z "${USE_CONDA:-}" ]; then
-  if [ -f "$APP_DIR/.env" ] && grep -q '^PA_INSTALL_USE_CONDA=1' "$APP_DIR/.env"; then
-    USE_CONDA=1
-  else
-    USE_CONDA=0
-  fi
+  if [ "$(_env_get PA_INSTALL_USE_CONDA)" = "1" ]; then USE_CONDA=1; else USE_CONDA=0; fi
 fi
+CONDA_PREFIX_DIR=${CONDA_PREFIX_DIR:-$(_env_get PA_INSTALL_CONDA_PREFIX)}
+CONDA_PREFIX_DIR=${CONDA_PREFIX_DIR:-/opt/miniforge3}
+CONDA_ENV=${CONDA_ENV:-$(_env_get PA_INSTALL_CONDA_ENV)}
+CONDA_ENV=${CONDA_ENV:-oah}
 
 # 找 Python：优先 3.12（依赖按 3.12 锁的），也会去常见安装位置找
 find_python() {
@@ -159,8 +159,12 @@ else
   [ -n "$LLM_KEY" ]    || warn "PA_LLM_DEEPSEEK_API_KEY 为空 —— 不填则对话不可用"
   [ -n "${PA_AGENT_PG_PASS:-}" ] || warn "PA_AGENT_PG_PASS 为空 —— PG 连不上服务会启动失败（必需项）"
 fi
-if [ "$USE_CONDA" = "1" ] && ! grep -q '^PA_INSTALL_USE_CONDA=1' .env; then
-  echo "PA_INSTALL_USE_CONDA=1" >> .env
+if [ "$USE_CONDA" = "1" ]; then
+  # 记住这台机器用的 conda 位置与环境名，重跑时不再依赖命令行参数
+  sed -i '/^PA_INSTALL_USE_CONDA=/d;/^PA_INSTALL_CONDA_PREFIX=/d;/^PA_INSTALL_CONDA_ENV=/d' .env
+  { echo "PA_INSTALL_USE_CONDA=1"
+    echo "PA_INSTALL_CONDA_PREFIX=$CONDA_PREFIX_DIR"
+    echo "PA_INSTALL_CONDA_ENV=$CONDA_ENV"; } >> .env
 fi
 chmod 600 .env
 mkdir -p logs
