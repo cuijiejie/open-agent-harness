@@ -44,6 +44,11 @@ async def lifespan(_app: FastAPI):
     老数据（同步 saver 写的）可以直接读，不需要迁库。
     """
     from src.infra.CheckpointerManager import init_checkpointer_async
+    from src.infra.db.bootstrap import ensure_tables
+
+    # 建表（幂等）：chat_sessions / chat_messages 没有别的地方会自建，
+    # 少了它们第一次对话就报 table doesn't exist；失败只记 ERROR，不阻断启动
+    await ensure_tables()
 
     await init_checkpointer_async()
     log.info(f"FastAPI 启动: prefix={PREFIX}, pid={os.getpid()}")
