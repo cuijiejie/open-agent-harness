@@ -50,10 +50,12 @@ sudo -u postgres psql -c "ALTER USER postgres PASSWORD '你的PG密码';" \
 # 2. 安装（建 venv、装依赖、构建前端、生成 .env、装 systemd、探活）
 sudo PA_DB_MYSQL_PASS='你的密码' PA_AGENT_PG_PASS='你的PG密码' \
      PA_LLM_DEEPSEEK_API_KEY='sk-你的key' \
+     USE_CONDA=1 CONDA_PREFIX_DIR="$HOME/miniforge3" CONDA_ENV=oah \
      bash deploy/install.sh
 
 # 3. 建管理员（密码默认 admin，可 --password 指定）
-cd /opt/open-agent-harness && PYTHONPATH=. .venv/bin/python deploy/seed_admin.py --password '你的登录密码'
+cd /opt/open-agent-harness && PYTHONPATH=. "$HOME/miniforge3/envs/oah/bin/python" \
+     deploy/seed_admin.py --password '你的登录密码'
 ```
 
 装完打开 `http://<服务器IP>:5001/open-agent-harness/`。
@@ -73,7 +75,7 @@ cd frontend && npm ci && npm run build && cd ..
 uvicorn src.app_fastapi:app --host 0.0.0.0 --port 5001 --workers 4   # http://localhost:5001/open-agent-harness/
 ```
 
-首次登录先建管理员：`PYTHONPATH=. .venv/bin/python deploy/seed_admin.py --password '你的密码'`（旧版的免密直登 `/test-login` 已删除）。
+首次登录先建管理员：`PYTHONPATH=. "$HOME/miniforge3/envs/oah/bin/python" deploy/seed_admin.py --password '你的密码'`（旧版的免密直登 `/test-login` 已删除）。
 
 **三步部署**（装环境 → 建库初始化 → 登录）见 [`docs/部署说明.md`](docs/部署说明.md)；
 日常运维、可选组件（沙箱 / MCP / Redis）、升级、排障见 [`docs/运维与排查.md`](docs/运维与排查.md)。
