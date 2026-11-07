@@ -17,6 +17,18 @@ WORKERS=${WORKERS:-4}
 SERVICE=${SERVICE:-open-agent-harness}
 SKIP_FRONTEND=${SKIP_FRONTEND:-0}
 
+# Python 环境：默认 venv；USE_CONDA=1 时用已有的 conda 环境（不新建 venv）
+# 选过 conda 的机器会把 PA_INSTALL_USE_CONDA=1 写进 .env，之后重跑无需再传
+CONDA_PREFIX_DIR=${CONDA_PREFIX_DIR:-/opt/miniconda3}
+CONDA_ENV=${CONDA_ENV:-oah}
+if [ -z "${USE_CONDA:-}" ]; then
+  if [ -f "$APP_DIR/.env" ] && grep -q '^PA_INSTALL_USE_CONDA=1' "$APP_DIR/.env"; then
+    USE_CONDA=1
+  else
+    USE_CONDA=0
+  fi
+fi
+
 # 找 Python：优先 3.12（依赖按 3.12 锁的），也会去常见安装位置找
 find_python() {
   for c in python3.12 /usr/bin/python3.12 /usr/local/bin/python3.12 \
@@ -82,11 +94,23 @@ fi
 
 cd "$APP_DIR"
 
-blue "2/7 Python 虚拟环境 + 依赖"
-[ -x .venv/bin/python ] || "$PY" -m venv .venv
-.venv/bin/pip install -q -U pip
-.venv/bin/pip install -q -r requirements.txt
-ok "依赖就绪（$(.venv/bin/python -V)）"
+blue "2/7 Python 环境 + 依赖"
+if [ "$USE_CONDA" = "1" ]; then
+  [ -x "$CONDA_PREFIX_DIR/bin/conda" ] || die "找不到 $CONDA_PREFIX_DIR/bin/conda（先装 Miniconda/Minicforge，或用 USE_CONDA=0）"
+  "$CONDA_PREFIX_DIR/bin/conda" env list | awk '{print $1}' | grep -qx "$CONDA_ENV" \
+    || "$CONDA_PREFIX_DIR/bin/conda" create -y -q -n "$CONDA_ENV" --override-channels -c conda-forge python=3.12
+  PY_BIN="$CONDA_PREFIX_DIR/envs/$CONDA_ENV/bin/python"
+  [ -x "$PY_BIN" ] || die "conda 环境 $CONDA_ENV 里没有 python：$PY_BIN"
+  "$PY_BIN" -m pip install -q -U pip
+  "$PY_BIN" -m pip install -q -r requirements.txt
+  ok "依赖就绪（$("$PY_BIN" -V) @ conda:$CONDA_ENV）"
+else
+  [ -x .venv/bin/python ] || "$PY" -m venv .venv
+  PY_BIN="$APP_DIR/.venv/bin/python"
+  "$PY_BIN" -m pip install -q -U pip
+  "$PY_BIN" -m pip install -q -r requirements.txt
+  ok "依赖就绪（$("$PY_BIN" -V) @ venv）"
+fi
 
 blue "3/7 前端构建"
 if [ "$SKIP_FRONTEND" = "1" ]; then
@@ -135,6 +159,9 @@ else
   [ -n "$LLM_KEY" ]    || warn "PA_LLM_DEEPSEEK_API_KEY 为空 —— 不填则对话不可用"
   [ -n "${PA_AGENT_PG_PASS:-}" ] || warn "PA_AGENT_PG_PASS 为空 —— PG 连不上服务会启动失败（必需项）"
 fi
+if [ "$USE_CONDA" = "1" ] && ! grep -q '^PA_INSTALL_USE_CONDA=1' .env; then
+  echo "PA_INSTALL_USE_CONDA=1" >> .env
+fi
 chmod 600 .env
 mkdir -p logs
 
@@ -173,11 +200,13 @@ PY
 blue "6/7 安装 systemd 服务"
 if [ ! -w /etc/systemd/system ] || [ "$(id -u)" != "0" ]; then
   warn "非 root：跳过 systemd，改为前台试跑"
-  echo "    手动启动：cd $APP_DIR && PYTHONPATH=. .venv/bin/python -m uvicorn src.app_fastapi:app --host 0.0.0.0 --port $PORT --workers $WORKERS"
+  echo "    手动启动：cd $APP_DIR && PYTHONPATH=. $PY_BIN -m uvicorn src.app_fastapi:app --host 0.0.0.0 --port $PORT --workers $WORKERS"
 else
   # 端口和 worker 数都在单元文件里各占一个 token：单元里写的是 `--port 5001`，
   # 不是 `0.0.0.0:5001`（老 sed 匹配不到，PORT= 形同虚设，换端口装必撞车）
+  # 解释器路径：venv 与 conda 两种形态都要落到 unit 里
   sed -e "s#/opt/open-agent-harness#$APP_DIR#g" \
+      -e "s#$APP_DIR/.venv/bin/python#$PY_BIN#g" \
       -e "s#--port 5001#--port $PORT#g" \
       -e "s#--workers 4#--workers $WORKERS#g" \
     deploy/open-agent-harness.service > "/etc/systemd/system/$SERVICE.service"

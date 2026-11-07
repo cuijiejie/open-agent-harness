@@ -63,7 +63,9 @@ cd /opt/open-agent-harness && PYTHONPATH=. .venv/bin/python deploy/seed_admin.py
 ### 本地试跑
 
 ```bash
-python3.12 -m venv .venv && source .venv/bin/activate
+# Python 环境用 Miniconda（部署机为 /opt/miniconda3/envs/oah），见 docs/Miniconda环境.md
+conda create -y -n oah --override-channels -c conda-forge python=3.12
+conda activate oah
 pip install -r requirements.txt
 export PA_DB_MYSQL_PASS=xxx PA_LLM_DEEPSEEK_API_KEY=sk-xxx
 export PA_APP_SECRET_KEY=$(python -c "import secrets;print(secrets.token_hex(32))")
