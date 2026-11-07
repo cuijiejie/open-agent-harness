@@ -15,7 +15,12 @@
 #   pip 只能装纯 Python 包（系统级依赖装不上）。所以系统级能力只能进镜像。
 #
 # 构建（在 VM 上，需 sudo）：
-#   sudo docker build --no-cache -t pa-sandbox:1.3 -f /data1/open-agent-harness/docker/pa-sandbox.Dockerfile /data1/open-agent-harness
+#   sudo DOCKER_BUILDKIT=1 docker build -t pa-sandbox:1.3 -f docker/pa-sandbox.Dockerfile .
+#
+# ⚠️ 必须开 BuildKit（并装 docker-buildx）：本文件用了 8 处 `RUN python3 - <<'PY'` heredoc，
+#    经典 builder 不支持 heredoc —— 它不会报错，而是把正文丢掉、跑一个空脚本，
+#    于是抽 SC 字形 / 写 matplotlibrc / Chromium 自检全部静默跳过，镜像里中文全是豆腐块，
+#    最后才在 `xlsx2pdf /tmp/c5.xlsx` 自检上以 "No such file" 暴露。踩过一次，别再用经典 builder。
 #
 # 使用：config/<env>/configs.cfg 里 openshell_image=pa-sandbox:1.3
 #       （镜像在沙箱创建时固定，已存在的沙箱需重建才会升级）
@@ -93,7 +98,7 @@ RUN apt-get update \
 # ===========================================================================
 # 四、Python 库（数据 / 图表 / PDF / Office / 解析 / 数据库）
 # ===========================================================================
-RUN pip3 install --no-cache-dir --break-system-packages \
+RUN pip3 install --no-cache-dir --break-system-packages --retries 8 --timeout 120 \
       pandas==2.2.3 openpyxl==3.1.5 xlsxwriter xlrd \
       matplotlib==3.9.2 Pillow seaborn scipy statsmodels sympy pyarrow \
       weasyprint reportlab pypdf fpdf2 pdfplumber \
@@ -114,7 +119,7 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 #    npmmirror 实测 3.9 MB/s（约 50 秒）。只在构建这一步用，不写进镜像 ENV。
 # ⚠️ 浏览器必须装到【运行时默认路径】(HOME=/sandbox → /sandbox/.cache/ms-playwright)，
 #    否则沙箱里的 playwright 找不到（镜像 ENV 在沙箱里会被清掉）。
-RUN pip3 install --no-cache-dir --break-system-packages playwright \
+RUN pip3 install --no-cache-dir --break-system-packages --retries 8 --timeout 120 playwright \
  && PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright \
       playwright install --with-deps chromium \
  && rm -rf /root/.cache/pip
