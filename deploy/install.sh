@@ -3,15 +3,17 @@
 # Open Agent Harness · 一键安装/升级
 #
 #   sudo bash deploy/install.sh                  # 默认装到 /opt/open-agent-harness，端口 5001
-#   sudo APP_DIR=/srv/agent PORT=8080 bash deploy/install.sh
+#   sudo APP_DIR=/srv/agent PORT=8080 WORKERS=8 bash deploy/install.sh
 #
 # 幂等：重复执行 = 升级（重装依赖、重建前端、重启服务）
+# WORKERS 默认 4，每 worker 常驻 300~400MB，内存小的机器按 (内存GB/2) 给
 # 前置：python3.12、node 18+、npm、MySQL、PostgreSQL（Redis/沙箱可选）
 # =============================================================================
 set -euo pipefail
 
 APP_DIR=${APP_DIR:-/opt/open-agent-harness}
 PORT=${PORT:-5001}
+WORKERS=${WORKERS:-4}
 SERVICE=${SERVICE:-open-agent-harness}
 SKIP_FRONTEND=${SKIP_FRONTEND:-0}
 
@@ -64,10 +66,12 @@ if [ "$SRC_DIR" != "$APP_DIR" ]; then
   blue "1/7 同步代码到 $APP_DIR"
   mkdir -p "$APP_DIR"
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete \
-      --exclude '.git' --exclude '.venv' --exclude 'node_modules' \
-      --exclude '__pycache__' --exclude 'logs' --exclude '.env' \
-      "$SRC_DIR"/ "$APP_DIR"/
+    # --delete 会把目标端的 frontend/dist 抹掉（源码树里通常没有构建产物），
+    # 所以 SKIP_FRONTEND=1 时连 dist 一起排除，否则"跳过构建"等于"跳过产物"
+    _RX=(--exclude '.git' --exclude '.venv' --exclude 'node_modules'
+         --exclude '__pycache__' --exclude 'logs' --exclude '.env')
+    [ "$SKIP_FRONTEND" = "1" ] && _RX+=(--exclude 'frontend/dist')
+    rsync -a --delete "${_RX[@]}" "$SRC_DIR"/ "$APP_DIR"/
   else
     cp -a "$SRC_DIR"/. "$APP_DIR"/
   fi
@@ -169,9 +173,13 @@ PY
 blue "6/7 安装 systemd 服务"
 if [ ! -w /etc/systemd/system ] || [ "$(id -u)" != "0" ]; then
   warn "非 root：跳过 systemd，改为前台试跑"
-  echo "    手动启动：cd $APP_DIR && PYTHONPATH=. .venv/bin/python -m uvicorn src.app_fastapi:app --host 0.0.0.0 --port $PORT --workers 4"
+  echo "    手动启动：cd $APP_DIR && PYTHONPATH=. .venv/bin/python -m uvicorn src.app_fastapi:app --host 0.0.0.0 --port $PORT --workers $WORKERS"
 else
-  sed -e "s#/opt/open-agent-harness#$APP_DIR#g" -e "s#0.0.0.0:5001#0.0.0.0:$PORT#g" \
+  # 端口和 worker 数都在单元文件里各占一个 token：单元里写的是 `--port 5001`，
+  # 不是 `0.0.0.0:5001`（老 sed 匹配不到，PORT= 形同虚设，换端口装必撞车）
+  sed -e "s#/opt/open-agent-harness#$APP_DIR#g" \
+      -e "s#--port 5001#--port $PORT#g" \
+      -e "s#--workers 4#--workers $WORKERS#g" \
     deploy/open-agent-harness.service > "/etc/systemd/system/$SERVICE.service"
   systemctl daemon-reload
   systemctl enable "$SERVICE" >/dev/null 2>&1 || true
@@ -182,7 +190,7 @@ fi
 blue "7/7 探活"
 URL="http://127.0.0.1:$PORT/open-agent-harness/"
 for i in $(seq 1 15); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 "$URL" 2>/dev/null || echo 000)
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 "$URL" 2>/dev/null) || code=000
   case "$code" in
     200|302) ok "服务已就绪（HTTP $code）"; break ;;
     *) [ "$i" = "15" ] && die "15 次探活失败（最后状态 $code），看日志：tail -50 $APP_DIR/logs/app.log"; sleep 2 ;;
@@ -195,12 +203,11 @@ cat <<EOF
 部署完成
 
   访问地址   http://<服务器IP>:$PORT/open-agent-harness/
-  登录       用户名 + 口令（未设口令 = 免密，见 config/configs.cfg [app] login_password）
-  首次进入   第一个登录的用户不会自动是管理员：
-             在数据库里给他 admin 角色，见 docs/部署说明.md §7「设管理员」
   日志       $APP_DIR/logs/app.log
   服务       systemctl status $SERVICE
 
-下一步：把 [app] test_login_enabled 改成 false（对外开放前必做）
+下一步（必须）：建管理员账号，否则没人能登录
+  cd $APP_DIR && PYTHONPATH=. .venv/bin/python deploy/seed_admin.py --password '你的密码'
+  账号默认 admin；旧的免密直登 /test-login 已删除，只支持账号密码登录
 ────────────────────────────────────────────────────────────
 EOF
