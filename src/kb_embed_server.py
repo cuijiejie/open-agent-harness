@@ -33,7 +33,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 EMBED_MODEL: str = os.getenv("EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
-RERANK_MODEL: str = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-base")
+# 重排是可选项：设为 none / off / 空 = 不加载（CPU 机器上建议关掉）
+# 实测（8 核无 GPU，两个模型同进程）：重排加载后内存打满 2G，单条文本嵌入从
+# 1.2s 掉到 8s；20 段重排 3.2s，而检索侧的重排超时是 200ms，等于白占资源
+_RERANK_RAW: str = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-base")
+RERANK_MODEL: str = "" if _RERANK_RAW.strip().lower() in ("none", "off", "false", "0") else _RERANK_RAW
 THREADS: int = int(os.getenv("EMBED_THREADS", "4"))
 
 app = FastAPI(title="OAH KB Embedding Service", docs_url=None, redoc_url=None, openapi_url=None)
@@ -66,6 +70,9 @@ def _ensure_embed() -> None:
 
 def _ensure_rerank() -> None:
     """加载重排模型（可选项，20~30 秒，放到后台线程，不能拖住 /embed）"""
+    if not RERANK_MODEL:
+        _state["rerank_err"] = "disabled by config (RERANK_MODEL=none)"
+        return
     if _state["rerank"] is not None or _state["rerank_err"]:
         return
     with _rerank_lock:
