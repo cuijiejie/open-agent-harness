@@ -9,8 +9,12 @@ Environment=PYTHONPATH=/opt/open-agent-harness
 Environment=PYTHONUNBUFFERED=1
 # 模型下载走镜像（内网/下载慢时必需）
 Environment=HF_ENDPOINT=https://hf-mirror.com
-Environment=EMBED_MODEL=BAAI/bge-base-zh-v1.5
-Environment=RERANK_MODEL=BAAI/bge-reranker-base
+# fastembed 0.4.2 里没有 bge-base-zh-v1.5；bge-small-zh 只有 Google Storage 源
+# 这个模型有 HF 源、768 维，内网可离线部署
+Environment=EMBED_MODEL=sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+# 重排默认关闭：无 GPU 时两个模型同进程会打满内存，嵌入从 0.3s 掉到 8s
+# 有 GPU / 机器够强时改成 BAAI/bge-reranker-base
+Environment=RERANK_MODEL=none
 Environment=EMBED_THREADS=4
 # 独立虚拟环境：只装 fastembed + uvicorn，不污染主服务
 ExecStart=/opt/open-agent-harness/.venv-embed/bin/python -m src.kb_embed_server --host 127.0.0.1 --port 5110
