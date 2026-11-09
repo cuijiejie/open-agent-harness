@@ -40,14 +40,21 @@ app = FastAPI(title="OAH KB Embedding Service", docs_url=None, redoc_url=None, o
 
 _state: dict = {"embed": None, "rerank": None, "dim": 0, "embed_err": "", "rerank_err": "",
                 "loaded_at": 0.0}
-_lock = threading.Lock()
+# 两把锁：重排模型加载要 20~30 秒，用同一把锁会把 /embed 一起堵住
+# （线上现象：重排首次加载期间，主服务的 /api/kb/stats 探活 3 秒超时 → 界面报"嵌入服务不可用"）
+_embed_lock = threading.Lock()
+_rerank_lock = threading.Lock()
 
 
-def _load() -> None:
-    """懒加载：启动即加载（systemd 起来就能用），失败记录原因但不退出进程"""
+def _ensure_embed() -> None:
+    """加载嵌入模型（启动时必须成功，否则 /health 503）"""
+    if _state["embed"] is not None:
+        return
     from fastembed import TextEmbedding
 
-    if _state["embed"] is None:
+    with _embed_lock:
+        if _state["embed"] is not None:
+            return
         try:
             _state["embed"] = TextEmbedding(model_name=EMBED_MODEL, threads=THREADS)
             probe = next(iter(_state["embed"].embed(["向量维度探测"])))
@@ -56,7 +63,14 @@ def _load() -> None:
         except Exception as e:                     # 模型没下载/路径错
             _state["embed_err"] = f"{type(e).__name__}: {e}"
 
-    if _state["rerank"] is None and not _state["rerank_err"]:
+
+def _ensure_rerank() -> None:
+    """加载重排模型（可选项，20~30 秒，放到后台线程，不能拖住 /embed）"""
+    if _state["rerank"] is not None or _state["rerank_err"]:
+        return
+    with _rerank_lock:
+        if _state["rerank"] is not None or _state["rerank_err"]:
+            return
         try:
             from fastembed.rerank.cross_encoder import TextCrossEncoder
 
@@ -64,6 +78,12 @@ def _load() -> None:
         except Exception as e:
             # 重排是可选项：加载失败就明确标记，检索侧会自动跳过
             _state["rerank_err"] = f"{type(e).__name__}: {e}"
+
+
+def _load() -> None:
+    """两个模型都加载（启动时用）"""
+    _ensure_embed()
+    _ensure_rerank()
 
 
 class EmbedIn(BaseModel):
@@ -78,7 +98,10 @@ class RerankIn(BaseModel):
 
 @app.on_event("startup")
 def _startup() -> None:
-    _load()
+    # 嵌入必须有：同步加载，加载完才对外服务
+    _ensure_embed()
+    # 重排是可选项且要 20~30 秒：后台预热，不阻塞 /health、/embed
+    threading.Thread(target=_ensure_rerank, daemon=True, name="rerank-warmup").start()
 
 
 @app.get("/health")
@@ -96,8 +119,7 @@ def health() -> JSONResponse:
 
 @app.post("/embed")
 def embed(body: EmbedIn) -> JSONResponse:
-    with _lock:
-        _load()
+    _ensure_embed()
     model = _state["embed"]
     if model is None:
         return JSONResponse({"error": f"嵌入模型未加载：{_state['embed_err']}"}, status_code=503)
@@ -113,8 +135,7 @@ def embed(body: EmbedIn) -> JSONResponse:
 
 @app.post("/rerank")
 def rerank(body: RerankIn) -> JSONResponse:
-    with _lock:
-        _load()
+    _ensure_rerank()
     model = _state["rerank"]
     if model is None:
         return JSONResponse({"error": f"重排模型不可用：{_state['rerank_err']}"}, status_code=503)
