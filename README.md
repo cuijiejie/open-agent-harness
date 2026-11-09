@@ -79,6 +79,8 @@ uvicorn src.app_fastapi:app --host 0.0.0.0 --port 5001 --workers 4   # http://lo
 
 **三步部署**（装环境 → 建库初始化 → 登录）见 [`docs/部署说明.md`](docs/部署说明.md)；
 日常运维、可选组件（沙箱 / MCP / Redis）、升级、排障见 [`docs/运维与排查.md`](docs/运维与排查.md)。
+文档知识库（RAG + 扫描件 OCR）见 [`docs/知识库部署说明.md`](docs/知识库部署说明.md)；
+偏好 / 规则与口径 / 文档资料三层怎么分工见 [`docs/知识分层说明.md`](docs/知识分层说明.md)。
 
 ## 目录结构
 
