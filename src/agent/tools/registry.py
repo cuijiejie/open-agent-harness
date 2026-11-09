@@ -178,6 +178,7 @@ def load_registry() -> list[ToolSpec]:
     """把各业务模块里的 @tool 装配成 ToolSpec 列表（由 tools/__init__ 调用）"""
     from src.agent.tools.interaction import ask_user
     from src.agent.tools.knowledge_tools import forget_fact, remember_fact
+    from src.agent.tools.kb_tools import kb_search
     from src.agent.tools.prefs import forget_preference, remember_preference
     from src.agent.tools.sandbox import sandbox_shell
 
@@ -194,6 +195,8 @@ def load_registry() -> list[ToolSpec]:
                  extra={"group": "记忆", "display_name": "忘掉业务知识"}),
         ToolSpec("forget_preference", forget_preference, "write", note="忘掉用户偏好",
                  extra={"group": "记忆", "display_name": "忘掉用户偏好"}),
+        ToolSpec("kb_search", kb_search, "read", note="检索知识库文档（RAG）",
+                 extra={"group": "知识库", "display_name": "知识库检索"}),
     ]
 
 

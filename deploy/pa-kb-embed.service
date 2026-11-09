@@ -1,0 +1,23 @@
+[Unit]
+Description=OAH KB Embedding Service (bge ONNX, localhost only)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/open-agent-harness
+Environment=PYTHONPATH=/opt/open-agent-harness
+Environment=PYTHONUNBUFFERED=1
+# 模型下载走镜像（内网/下载慢时必需）
+Environment=HF_ENDPOINT=https://hf-mirror.com
+Environment=EMBED_MODEL=BAAI/bge-base-zh-v1.5
+Environment=RERANK_MODEL=BAAI/bge-reranker-base
+Environment=EMBED_THREADS=4
+# 独立虚拟环境：只装 fastembed + uvicorn，不污染主服务
+ExecStart=/opt/open-agent-harness/.venv-embed/bin/python -m src.kb_embed_server --host 127.0.0.1 --port 5110
+Restart=always
+RestartSec=5
+# 一个进程一份模型，约 300~600MB
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

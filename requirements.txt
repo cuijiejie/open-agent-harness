@@ -19,3 +19,11 @@ uvicorn[standard]==0.54.0
 jinja2==3.1.6       # 登录页模板
 itsdangerous==2.2.0 # 会话签名
 python-multipart==0.0.33  # 表单/文件上传
+
+# ---- 知识库（RAG）：解析 + 中文稀疏召回；嵌入模型在独立服务里（见 requirements-embed.txt） ----
+pymupdf==1.24.14            # PDF 解析（含文字层检测）
+python-docx==1.1.2          # DOCX 解析
+openpyxl==3.1.5             # XLSX 解析
+python-pptx==1.0.2          # PPTX 解析
+jieba==0.42.1               # 中文分词（BM25 召回用）
+rank-bm25==0.2.2            # 稀疏召回

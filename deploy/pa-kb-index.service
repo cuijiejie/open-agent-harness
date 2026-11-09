@@ -1,0 +1,14 @@
+[Unit]
+Description=OAH KB index worker (parse + chunk + embed queued documents)
+After=network.target postgresql.service pa-kb-embed.service
+Wants=pa-kb-embed.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/open-agent-harness
+Environment=PYTHONPATH=/opt/open-agent-harness
+EnvironmentFile=/opt/open-agent-harness/.env
+ExecStart=/opt/open-agent-harness/.venv/bin/python -m src.infra.kb.ingest --once
+# 一批文档可能跑几十分钟；超时留给夜里足够的时间
+TimeoutStartSec=3600
+Nice=10

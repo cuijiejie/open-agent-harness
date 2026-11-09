@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from jinja2 import Template
 
 from config.Configs import cfg
-from src.web.routers import (audit, chat, knowledge, mcp, platform_skill,
+from src.web.routers import (audit, chat, knowledge, kb, mcp, platform_skill, 
                              prefs, rbac, sandbox, skill, trace)
 from src.infra.utils.LogUtil import log
 from src.web.middleware import RequestContextMiddleware
@@ -81,7 +81,7 @@ app.add_middleware(FlaskCompatibleSessionMiddleware, secret_key=cfg.secretKey)
 app.add_middleware(RequestContextMiddleware)
 
 # 业务路由：router 里写 /api/xxx，统一挂到 PREFIX 下
-for _r in (audit, trace, chat, knowledge, prefs, mcp, rbac, sandbox, skill, platform_skill):
+for _r in (audit, trace, chat, knowledge, kb, prefs, mcp, rbac, sandbox, skill, platform_skill):
     app.include_router(_r.router, prefix=PREFIX)
 
 

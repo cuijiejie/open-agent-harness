@@ -1,0 +1,5 @@
+# 嵌入/重排服务专用依赖（独立进程，不要装进主服务环境）
+# 主服务只通过 HTTP 调它（KB_EMBED_URL），所以 onnxruntime 的内存只在服务里占一份
+fastembed==0.4.2
+fastapi==0.162.0
+uvicorn[standard]==0.54.0

@@ -102,6 +102,35 @@ class Configs(object):
         self.pgUser: str = _get('agent', 'pg_user', 'postgres')
         self.pgPass: str = _get('agent', 'pg_pass', '')
 
+        # ---------------- 知识库（文档 RAG） ----------------
+        # 开关：关掉后 /api/kb/* 全部 404，kb_search 工具也会拒绝
+        self.kbEnabled: bool = _get('kb', 'enabled', 'true', lambda v: str(v).strip().lower() in ('1', 'true', 'yes', 'on'))
+        # 独立 PG 库（pgvector）；口令走 PA_KB_PG_PASS
+        self.kbPgHost: str = _get('kb', 'pg_host', '') or self.pgHost
+        self.kbPgPort: int = _get('kb', 'pg_port', '5432', int)
+        self.kbPgDb: str = _get('kb', 'pg_db', 'kb')
+        self.kbPgUser: str = _get('kb', 'pg_user', '') or self.pgUser
+        self.kbPgPass: str = _get('kb', 'pg_pass', '') or self.pgPass
+        self.kbMaxConns: int = _get('kb', 'max_conns', '4', int)
+        # 本地嵌入/重排服务（独立进程，见 src/kb_embed_server.py）
+        self.kbEmbedUrl: str = _get('kb', 'embed_url', 'http://127.0.0.1:5110')
+        self.kbDim: int = _get('kb', 'dim', '768', int)
+        self.kbRerankTimeoutMs: int = _get('kb', 'rerank_timeout_ms', '200', int)
+        # 上传与索引
+        self.kbMaxFileMb: int = _get('kb', 'max_file_mb', '20', int)
+        self.kbDataDir: str = _get('kb', 'data_dir', '')
+
+        # ---- OCR（扫描件：无文字层的 PDF）----
+        # 走 OpenAI 协议的视觉接口；网关在内网，文档不出内网
+        self.kbOcrEnabled: bool = _get('kb', 'ocr_enabled', 'true',
+                                       lambda v: str(v).strip().lower() in ('1', 'true', 'yes', 'on'))
+        self.kbOcrBaseUrl: str = _get('kb', 'ocr_base_url', '')
+        self.kbOcrApiKey: str = _get('kb', 'ocr_api_key', '')
+        self.kbOcrModel: str = _get('kb', 'ocr_model', '')
+        self.kbOcrDpi: int = _get('kb', 'ocr_dpi', '150', int)
+        self.kbOcrMaxPages: int = _get('kb', 'ocr_max_pages', '30', int)
+        self.kbOcrTimeoutS: int = _get('kb', 'ocr_timeout_s', '120', int)
+
         # OpenShell 沙箱配置（每个登录用户独立的隔离执行环境）
         # openshell_enabled=false 时 sandbox_shell 工具优雅报错，不影响其他功能
         self.openshellEnabled: bool = _get(

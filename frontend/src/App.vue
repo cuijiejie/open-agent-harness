@@ -583,7 +583,18 @@
 
           <!-- ===== 角色管理：角色 → 内置工具 / MCP 工具 ===== -->
           <template v-else-if="sysTab === 'knowledge'">
-            <div class="know-add">
+            <!-- 两个子页：规则与口径（pa_knowledge 短事实）/ 文档资料（RAG） -->
+            <div class="kb-tabs">
+              <button type="button" :class="['kb-tab', { on: kbTab === 'facts' }]" @click="kbTab = 'facts'">
+                规则与口径
+              </button>
+              <button type="button" :class="['kb-tab', { on: kbTab === 'docs' }]" @click="openKbDocs">
+                文档资料<span v-if="kbStats.docs" class="kb-tab-badge">{{ kbStats.docs }}</span>
+              </button>
+            </div>
+
+            <!-- ===== 规则与口径（原有）===== -->
+            <template v-if="kbTab === 'facts'">            <div class="know-add">
               <input v-model="adminKnowInput" class="rbac-input know-input-main" maxlength="100"
                      placeholder="一句话事实，例如：产品 A 属于主推类目"
                      @keyup.enter="addAdminKnowledge" />
@@ -611,8 +622,80 @@
                 </div>
               </div>
             </div>
-          </template>
+            </template>
 
+            <!-- ===== 文档资料（RAG）===== -->
+            <template v-else>
+              <div class="know-add">
+                <input ref="kbFileInput" type="file" class="kb-file"
+                       accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.txt,.md,.csv" @change="onKbFilePicked" />
+                <select v-model="kbScope" class="rbac-input kb-scope">
+                  <option value="user">个人（仅自己可见）</option>
+                  <option value="global">全局（全员可读，仅管理员可传）</option>
+                </select>
+                <button type="button" class="btn-primary"
+                        :disabled="kbUploading || !kbFile" @click="uploadKbDoc">
+                  {{ kbUploading ? '上传中…' : '上传并索引' }}
+                </button>
+                <span class="kb-hint">{{ kbFileName || 'PDF / Word / Excel / PPT，≤20MB，上传后排队索引' }}</span>
+              </div>
+
+              <div class="know-add">
+                <input v-model="kbQuery" class="rbac-input know-input-main"
+                       placeholder="检索测试：例如「天津 2023 地区生产总值」"
+                       @keyup.enter="runKbSearch" />
+                <button type="button" class="btn-primary"
+                        :disabled="kbSearching || !kbQuery.trim()" @click="runKbSearch">
+                  {{ kbSearching ? '检索中…' : '检索' }}
+                </button>
+              </div>
+
+              <div v-if="kbResults.length" class="kb-hits">
+                <div v-for="(r, i) in kbResults" :key="r.chunk_id" class="kb-hit">
+                  <div class="kb-hit-head">
+                    <span class="kb-hit-idx">[{{ i + 1 }}]</span>
+                    <span class="kb-hit-doc">{{ r.doc }}</span>
+                    <span v-if="r.page" class="kb-hit-meta">第 {{ r.page }} 页</span>
+                    <span v-if="r.section" class="kb-hit-meta">· {{ r.section }}</span>
+                    <span class="kb-hit-score">{{ r.score }}</span>
+                  </div>
+                  <div class="kb-hit-body">{{ r.content }}</div>
+                </div>
+              </div>
+              <div v-else-if="kbSearched" class="conv-empty">没有检索到相关内容</div>
+
+              <div class="table-wrap">
+                <div class="kb-thead">
+                  <span>ID</span><span>文件名</span><span>范围</span><span>大小</span>
+                  <span>页数</span><span>片段</span><span>状态</span><span>操作</span>
+                </div>
+                <div class="kb-list">
+                  <div v-if="!kbDocs.length" class="conv-empty">
+                    {{ kbLoading ? '加载中…' : '还没有文档，先在上面上传' }}
+                  </div>
+                  <div v-for="d in kbDocs" :key="d.id" class="kb-row">
+                    <div class="cell-muted">{{ d.id }}</div>
+                    <div class="cell-know kb-fname" :title="d.filename">{{ d.filename }}</div>
+                    <div>
+                      <span class="know-scope" :class="d.scope">{{ d.scope === 'global' ? '全局' : '个人' }}</span>
+                    </div>
+                    <div class="cell-muted">{{ d.size_kb }}KB</div>
+                    <div class="cell-muted">{{ d.pages || '—' }}</div>
+                    <div class="cell-muted">{{ d.chunks }}</div>
+                    <div>
+                      <span :class="['kb-status', d.status]" :title="d.error || ''">
+                        {{ kbStatusText(d.status) }}
+                      </span>
+                    </div>
+                    <div class="kb-ops">
+                      <a class="op-link" @click="reindexKbDoc(d)">重建</a>
+                      <a class="op-link danger" @click="removeKbDoc(d)">删除</a>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </template>
 
           <template v-else-if="sysTab === 'audit'">
 
@@ -1608,6 +1691,119 @@ const fmtTime = (v) => {
 }
 const adminKnowledge = ref([])
 const adminKnowInput = ref('')
+
+// ===== 知识库 · 文档资料（RAG）=====
+const kbTab = ref('facts')
+const kbDocs = ref([])
+const kbLoading = ref(false)
+const kbFile = ref(null)
+const kbFileName = ref('')
+const kbUploading = ref(false)
+const kbScope = ref('user')
+const kbQuery = ref('')
+const kbResults = ref([])
+const kbSearching = ref(false)
+const kbSearched = ref(false)
+const kbStats = ref({ docs: 0, chunks: 0, failed: 0, pending: 0 })
+const kbFileInput = ref(null)
+
+const kbStatusText = (st) => ({
+  pending: '排队中', parsing: '解析中', ocr: 'OCR 识别中', embedding: '索引中', indexed: '可用', failed: '失败',
+}[st] || st || '—')
+
+const loadKbStats = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/kb/stats`)
+    if (!res.ok) return
+    const d = await res.json().catch(() => ({}))
+    if (d.ok) kbStats.value = { docs: d.docs || 0, chunks: d.chunks || 0, failed: d.failed || 0, pending: d.pending || 0 }
+  } catch (e) { /* 知识库未启用时静默 */ }
+}
+
+const loadKbDocs = async () => {
+  kbLoading.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/kb/docs?limit=200`)
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok || d.ok === false) { showToast(d.error || '读取文档列表失败'); return }
+    kbDocs.value = d.items || []
+  } catch (e) {
+    showToast('读取文档列表失败：' + e.message)
+  } finally {
+    kbLoading.value = false
+  }
+}
+
+const openKbDocs = async () => {
+  kbTab.value = 'docs'
+  await Promise.all([loadKbDocs(), loadKbStats()])
+}
+
+const onKbFilePicked = (e) => {
+  const f = (e.target.files || [])[0]
+  kbFile.value = f || null
+  kbFileName.value = f ? `${f.name}（${Math.max(1, Math.round(f.size / 1024))}KB）` : ''
+}
+
+const uploadKbDoc = async () => {
+  if (!kbFile.value) return
+  kbUploading.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', kbFile.value)
+    fd.append('scope', kbScope.value)
+    const res = await fetch(`${apiBase}/api/kb/docs`, { method: 'POST', body: fd })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok || d.ok === false) { showToast(d.error || '上传失败'); return }
+    showToast('已上传，后台排队索引（稍后刷新状态）')
+    kbFile.value = null
+    kbFileName.value = ''
+    if (kbFileInput.value) kbFileInput.value.value = ''
+    await Promise.all([loadKbDocs(), loadKbStats()])
+  } catch (e) {
+    showToast('上传失败：' + e.message)
+  } finally {
+    kbUploading.value = false
+  }
+}
+
+const runKbSearch = async () => {
+  const q = kbQuery.value.trim()
+  if (!q) return
+  kbSearching.value = true
+  kbSearched.value = false
+  try {
+    const res = await fetch(`${apiBase}/api/kb/search?q=${encodeURIComponent(q)}&top_k=5`)
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok || d.ok === false) { showToast(d.error || '检索失败'); return }
+    kbResults.value = d.items || []
+    kbSearched.value = true
+  } catch (e) {
+    showToast('检索失败：' + e.message)
+  } finally {
+    kbSearching.value = false
+  }
+}
+
+const reindexKbDoc = async (d) => {
+  const ok = await confirmYes(`重建「${d.filename}」的索引？会在后台重新解析和嵌入。`)
+  if (!ok) return
+  const res = await fetch(`${apiBase}/api/kb/docs/${d.id}/reindex`, { method: 'POST' })
+  const j = await res.json().catch(() => ({}))
+  if (!res.ok || j.ok === false) { showToast(j.error || '重建失败'); return }
+  showToast('已加入重建队列')
+  await loadKbDocs()
+}
+
+const removeKbDoc = async (d) => {
+  const ok = await confirmYes(`删除「${d.filename}」？同时删除它的全部向量片段，不可恢复。`)
+  if (!ok) return
+  const res = await fetch(`${apiBase}/api/kb/docs/${d.id}`, { method: 'DELETE' })
+  const j = await res.json().catch(() => ({}))
+  if (!res.ok || j.ok === false) { showToast(j.error || '删除失败'); return }
+  showToast('已删除')
+  await Promise.all([loadKbDocs(), loadKbStats()])
+}
 const adminKnowTags = ref('')
 const adminKnowSaving = ref(false)
 
@@ -3961,6 +4157,45 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 .know-admin-add { display: flex; gap: 8px; margin-bottom: 12px; }
 .know-admin-add .prefs-input { flex: 1; }
 .know-add { display: flex; gap: 10px; align-items: center; padding: 0 18px 14px; }
+/* ===== 知识库子页签 ===== */
+.kb-tabs { display: flex; gap: 6px; padding: 0 18px 12px; }
+.kb-tab {
+  padding: 6px 14px; font-size: 13px; color: #64748b; background: #f1f5f9;
+  border: none; border-radius: 8px; cursor: pointer; transition: all .15s ease;
+}
+.kb-tab:hover { color: #4F46E5; background: #eef2ff; }
+.kb-tab.on { color: #fff; background: #4F46E5; }
+.kb-tab-badge {
+  display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 8px;
+  font-size: 11px; background: rgba(255,255,255,.28);
+}
+.kb-file { font-size: 12.5px; color: #475569; max-width: 320px; }
+.kb-scope { width: 220px; }
+.kb-hint { font-size: 12px; color: #94a3b8; }
+
+/* 检索结果 */
+.kb-hits { padding: 0 18px 14px; display: flex; flex-direction: column; gap: 8px; }
+.kb-hit { border: 1px solid #eef1f5; border-radius: 10px; padding: 10px 12px; background: #fff; }
+.kb-hit-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #64748b; margin-bottom: 6px; }
+.kb-hit-idx { color: #4F46E5; font-weight: 600; }
+.kb-hit-doc { color: #1e293b; font-weight: 600; }
+.kb-hit-meta { color: #94a3b8; }
+.kb-hit-score { margin-left: auto; color: #94a3b8; font-variant-numeric: tabular-nums; }
+.kb-hit-body { font-size: 12.5px; color: #334155; line-height: 1.6; white-space: pre-wrap; }
+
+/* 文档列表 */
+.kb-thead, .kb-row { display: grid; grid-template-columns: 56px minmax(220px, 1fr) 72px 80px 64px 64px 90px 110px; align-items: stretch; }
+.kb-thead { position: sticky; top: 0; z-index: 2; background: #f7f8fa; border-bottom: 1px solid #e6e9ef; font-size: 13px; font-weight: 600; color: #333; }
+.kb-thead > span, .kb-row > div { display: flex; align-items: center; justify-content: center; padding: 9px 8px; }
+.kb-row { border-bottom: 1px solid #f0f2f5; background: #fff; font-size: 12.5px; }
+.kb-row:hover { background: #fafbfc; }
+.kb-row:last-child { border-bottom: none; }
+.kb-fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; justify-content: flex-start !important; }
+.kb-ops { gap: 10px; }
+.kb-status { font-size: 11px; padding: 2px 7px; border-radius: 5px; }
+.kb-status.indexed { background: #e8f7ee; color: #16794c; }
+.kb-status.failed { background: #fdeaea; color: #b3261e; }
+.kb-status.pending, .kb-status.parsing, .kb-status.ocr, .kb-status.embedding { background: #eef2ff; color: #4338ca; }
 .know-input-main { flex: 1; }
 .know-input-tags { width: 260px; }
 .pane-sub { font-size: 12.5px; color: #94a3b8; margin-left: 10px; font-weight: 400; }
