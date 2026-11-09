@@ -170,7 +170,8 @@ chmod 600 .env
 mkdir -p logs
 
 blue "5/7 数据库连通性自检"
-.venv/bin/python - <<'PY' || warn "数据库连不上：先建库建账号（见 docs/部署说明.md §3），再重跑本脚本"
+# 解释器统一走 $PY_BIN：conda 模式下没有 .venv，写死 .venv/bin/python 会让两条自检恒失败
+"$PY_BIN" - <<'PY' || warn "数据库连不上：先建库建账号（见 docs/部署说明.md §3），再重跑本脚本"
 import os, sys
 sys.path.insert(0, ".")
 for line in open(".env", encoding="utf-8"):
@@ -186,7 +187,7 @@ print("    数据库连接正常:", cfg.mysqlHost, cfg.mysqlDB)
 PY
 
 # PG 是启动必需项：连不上服务会直接退出（不是降级），所以这里提前给出明确提示
-.venv/bin/python - <<'PY' || warn "PG 连不上：服务启动会直接退出。先建库改口令（PA_AGENT_PG_PASS），再重跑本脚本"
+"$PY_BIN" - <<'PY' || warn "PG 连不上：服务启动会直接退出。先建库改口令（PA_AGENT_PG_PASS），再重跑本脚本"
 import os, sys
 sys.path.insert(0, ".")
 for line in open(".env", encoding="utf-8"):
@@ -240,7 +241,7 @@ cat <<EOF
   服务       systemctl status $SERVICE
 
 下一步（必须）：建管理员账号，否则没人能登录
-  cd $APP_DIR && PYTHONPATH=. .venv/bin/python deploy/seed_admin.py --password '你的密码'
+  cd $APP_DIR && PYTHONPATH=. $PY_BIN deploy/seed_admin.py --password '你的密码'
   账号默认 admin；旧的免密直登 /test-login 已删除，只支持账号密码登录
 ────────────────────────────────────────────────────────────
 EOF
