@@ -61,6 +61,14 @@ async def lifespan(_app: FastAPI):
         if getattr(cfg, "kbEnabled", False):
             ok = await asyncio.to_thread(_kb_store.ensure_schema)
             log.info(f"知识库初始化: {'ok' if ok else '失败（详见上方错误）'}")
+            # 兜底：没有定时任务，重启/部署前没跑完的文档在这里补一脚
+            try:
+                from src.infra.kb import kick as _kb_kick
+
+                if await asyncio.to_thread(lambda: _kb_store.stats().get("pending", 0)):
+                    await asyncio.to_thread(_kb_kick.kick, "startup pending")
+            except Exception as e:
+                log.info(f"知识库启动补跑跳过：{e}")
     except Exception as e:
         log.warning(f"知识库初始化异常（不影响主流程）：{e}")
 

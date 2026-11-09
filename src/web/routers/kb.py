@@ -102,6 +102,16 @@ async def upload_doc(file: UploadFile = File(...), scope: str = Form("user"),
     except Exception as e:
         log.error(f"知识库上传失败: {e}", exc_info=True)
         return JSONResponse({"ok": False, "error": "上传失败"}, status_code=500)
+
+    # 落库只是登记，真正解析/切分/嵌入在独立进程里做；
+    # 这里立刻踢一脚，用户不用等定时任务（页面自己轮询状态）
+    if res.get("ok"):
+        try:
+            from src.infra.kb import kick
+
+            kick.kick(f"upload doc={res.get('doc_id')}")
+        except Exception as e:
+            log.warning(f"索引触发异常（不影响上传，可手动重建）: {e}")
     return JSONResponse(res, status_code=200 if res.get("ok") else 400)
 
 
@@ -138,6 +148,12 @@ def reindex(doc_id: int, username: str = Depends(require_login)):
         return JSONResponse({"ok": False, "error": "无权操作他人文档"}, status_code=403)
     task_id = store.add_task(doc_id, "reindex")
     store.set_doc_status(doc_id, "pending", error="")
+    try:
+        from src.infra.kb import kick
+
+        kick.kick(f"reindex doc={doc_id}")
+    except Exception as e:
+        log.warning(f"索引触发异常（任务已入队，可再点重建）: {e}")
     return JSONResponse({"ok": True, "doc_id": doc_id, "task_id": task_id})
 
 
