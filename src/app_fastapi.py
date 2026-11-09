@@ -51,6 +51,19 @@ async def lifespan(_app: FastAPI):
     await ensure_tables()
 
     await init_checkpointer_async()
+
+    # 知识库：确保 kb 库的表/扩展/索引存在（幂等）。
+    # 不放在这里，部署完访问 /api/kb/* 会报 relation "kb_doc" does not exist，
+    # 得等第一次跑索引 worker 才有表。可选组件失败不阻断启动。
+    try:
+        from src.infra.kb import store as _kb_store
+
+        if getattr(cfg, "kbEnabled", False):
+            ok = await asyncio.to_thread(_kb_store.ensure_schema)
+            log.info(f"知识库初始化: {'ok' if ok else '失败（详见上方错误）'}")
+    except Exception as e:
+        log.warning(f"知识库初始化异常（不影响主流程）：{e}")
+
     log.info(f"FastAPI 启动: prefix={PREFIX}, pid={os.getpid()}")
     # 安全自检：没有密码的账号等于"知道用户名也进不来"，但 admin 必须是可用的
     try:
