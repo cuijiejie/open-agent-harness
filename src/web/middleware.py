@@ -95,6 +95,20 @@ class RequestContextMiddleware:
                 # 接口 JSON 一律禁缓存
                 if path.startswith("/open-agent-harness/api/") and b"cache-control" not in names:
                     hdrs.append((b"cache-control", b"no-store"))
+                # 页面 HTML 必须回源校验：升级后 index.html 引用的 JS 哈希变了，
+                # 浏览器若沿用强缓存的旧 HTML，用户会一直看到旧界面（实测出现过：
+                # 新版有"文档资料"页，用户点开还是旧的知识库表）。
+                # 带哈希的 assets 可以长期缓存，因为内容一变文件名就变。
+                if b"cache-control" not in names:
+                    ctype = ""
+                    for _hn, _hv in hdrs:
+                        if _hn.lower() == b"content-type":
+                            ctype = _hv.decode("latin-1").lower()
+                            break
+                    if path.startswith("/open-agent-harness/assets/"):
+                        hdrs.append((b"cache-control", b"public, max-age=31536000, immutable"))
+                    elif ctype.startswith("text/html"):
+                        hdrs.append((b"cache-control", b"no-cache, must-revalidate"))
                 # 安全响应头：统一在中间件加，避免每个路由各写一遍/漏写
                 # （/api/artifacts 的 HTML/SVG 自己设了更严格的 CSP sandbox，这里不覆盖）
                 if b"server" in names:      # 不暴露 uvicorn 版本/实现
