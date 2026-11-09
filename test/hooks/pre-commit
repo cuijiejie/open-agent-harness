@@ -10,15 +10,21 @@
 #   3. 前端未声明变量/TDZ       （白屏 3 次）
 #   4. import 预检              （缺 import / blueprint 没注册）
 #   5. 敏感信息                 （部署脚本里有明文口令）
-#   6. 核心单测（装了 pytest 才跑）
+#   6. 单元测试（装了依赖才跑）
 
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 1
 PY=${PY:-python}
 FAIL=0
-# 本机可能没装全依赖（langchain 等），没有就只跑"不需要依赖"的检查
+# 本机可能没装全依赖（langchain 等），没有就只跑"不需要依赖"的检查。
+# 注意判据不能带 flask：Flask 已删除，requirements.txt 里也没有它，
+# 带上会让 HAS_DEPS 恒为 0 → import 预检与单测被永久跳过（曾经的假绿）。
 HAS_DEPS=0
-"$PY" -c "import langchain_core, flask" >/dev/null 2>&1 && HAS_DEPS=1
+"$PY" -c "import langchain_core, fastapi" >/dev/null 2>&1 && HAS_DEPS=1
+
+# 单测/导入只需占位值：没有真实密钥时 Configs 仍要能构造（ChatOpenAI 与 session 签名）
+export PA_LLM_DEEPSEEK_API_KEY=${PA_LLM_DEEPSEEK_API_KEY:-sk-placeholder-for-hooks}
+export PA_APP_SECRET_KEY=${PA_APP_SECRET_KEY:-hooks-secret}
 
 say() { printf '%s\n' "$*"; }
 
@@ -76,8 +82,8 @@ say "[4/6] import 预检"
 if [ "$HAS_DEPS" -eq 0 ]; then
   say "  跳过（本机未装依赖）"
 elif git diff --cached --name-only | grep -qE '^(src|config)/'; then
-  if ! "$PY" -c "import sys; sys.path.insert(0,'.'); import src.app" >/dev/null 2>&1; then
-    say "  ✗ import src.app 失败（缺依赖或循环引用），手动跑一下看报错"
+  if ! "$PY" -c "import sys; sys.path.insert(0,'.'); import src.app_fastapi" >/dev/null 2>&1; then
+    say "  ✗ import src.app_fastapi 失败（缺依赖或循环引用），手动跑一下看报错"
     FAIL=1
   fi
 else
@@ -100,12 +106,13 @@ else
 fi
 
 # ── 6. 单测 ─────────────────────────────────────────────────
-say "[6/6] 核心单测"
+say "[6/6] 单元测试（全量）"
 if [ "$HAS_DEPS" -eq 0 ]; then
   say "  跳过（本机未装依赖）"
 else
-  if ! "$PY" test/unit/test_core.py >/dev/null 2>&1; then
-    say "  ✗ 单测失败，跑 python test/unit/test_core.py 看详情"
+  # 只跑 test_core.py 会漏掉其余 100+ 个用例；-t 用 test/unit（仓库根不是包）
+  if ! "$PY" -m unittest discover -s test/unit -t test/unit -q >/dev/null 2>&1; then
+    say "  ✗ 单测失败，跑 python -m unittest discover -s test/unit -t test/unit 看详情"
     FAIL=1
   else
     say "  ✓ 通过"

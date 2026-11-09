@@ -24,8 +24,10 @@ mark_fail() { FAILED="$FAILED $1"; }
 head() { printf '\n\033[1m=== %s ===\033[0m\n' "$*"; }
 
 # ── 1. 后端单元测试 ────────────────────────────────────────────
+# -t 必须是 test/unit 本身：仓库根不是包（没有 test/__init__.py），
+# 用 -t . 会想 import test.unit，直接 ModuleNotFoundError。
 head "1/3 后端单元测试（unittest）"
-if $PY -m unittest discover -s test/unit -t . -q 2>&1 | tail -3; then
+if $PY -m unittest discover -s test/unit -t test/unit -q 2>&1 | tail -3; then
   echo "  -> OK"
 else
   echo "  -> FAIL"; mark_fail unit
@@ -44,7 +46,7 @@ else
 fi
 
 # ── 3. 静态检查 ────────────────────────────────────────────────
-head "3/3 静态检查（未定义名字 / 前端引用）"
+head "3/3 静态检查（未定义名字 / 前端引用 / 路由契约）"
 if $PY test/tools/check_undefined_names.py src config test >/dev/null 2>&1; then
   echo "  未定义名字: OK"
 else
@@ -54,6 +56,12 @@ if $PY test/check_refs.py >/dev/null 2>&1; then
   echo "  前端引用: OK"
 else
   echo "  前端引用: FAIL"; mark_fail refs
+fi
+# 路由契约：文件名不是 test_*.py，unittest discover 收不到，只能显式跑
+if $PY test/unit/route_contract.py >/dev/null 2>&1; then
+  echo "  路由契约: OK"
+else
+  echo "  路由契约: FAIL"; $PY test/unit/route_contract.py 2>&1 | tail -5; mark_fail routes
 fi
 
 # ── 汇总 ───────────────────────────────────────────────────────

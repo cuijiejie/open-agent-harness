@@ -24,7 +24,7 @@ BASELINE_MIN: int = 58          # 迁移完成时是 62（含 /logout 的 GET+PO
 SYS = {
     ("GET", "/"), ("GET", "/logout"), ("POST", "/logout"),
     ("GET", "/api/version"), ("GET", "/api/user/currentUser"),
-    ("GET", "/test.html"), ("GET", "/test-login"), ("POST", "/test-login"),
+    ("GET", "/test.html"),
     ("GET", "/login"), ("POST", "/login"),
 }
 

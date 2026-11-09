@@ -6,11 +6,24 @@
 - 有文字层的页不调模型（省钱）
 - 识别结果落盘缓存，第二次不再调用模型
 - 全部页失败时抛错（让 ingest 置 failed 而不是静默产出空文档）
-"""
-import os
 
-import pymupdf
-import pytest
+写法说明
+--------
+用 **unittest**（不再是 pytest）：仓库的测试入口是 `python -m unittest discover`，
+pytest 不在 requirements.txt 里 —— 原先用 pytest.fixture / monkeypatch 写的那版
+既跑不起来（缺 pytest），即使装了 pytest 也不会被 unittest 收集（模块级函数不是 TestCase）。
+pymupdf 只用来构造 PDF 夹具，缺它就跳过本模块，而不是让整个测试套件导入失败。
+"""
+import importlib.util
+import os
+import tempfile
+import unittest
+from unittest import mock
+
+# pymupdf 只用来构造 PDF 夹具（主服务里是延迟导入）。缺它就跳过本模块，
+# 而不是让整个测试套件导入失败；用 find_spec 而不是 try-import，避免把
+# 可选依赖写成模块级硬依赖。
+_HAS_PYMUPDF: bool = importlib.util.find_spec("pymupdf") is not None
 
 from src.infra.kb import ocr as ocr_mod
 
@@ -30,6 +43,8 @@ class _Cfg:
 
 
 def _make_pdf(path: str, pages: int, with_text: bool) -> None:
+    import pymupdf
+
     doc = pymupdf.open()
     for i in range(pages):
         page = doc.new_page()
@@ -41,56 +56,64 @@ def _make_pdf(path: str, pages: int, with_text: bool) -> None:
     doc.close()
 
 
-@pytest.fixture()
-def fake_cfg(monkeypatch, tmp_path):
-    cfg = _Cfg(data_dir=str(tmp_path))
-    monkeypatch.setattr("config.Configs.cfg", cfg, raising=False)
-    return cfg
+@unittest.skipUnless(_HAS_PYMUPDF, "需要 pymupdf（requirements.txt）来构造 PDF 夹具")
+class TestKbOcr(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.data_dir: str = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+        self.cfg = _Cfg(data_dir=self.data_dir)
+        p = mock.patch("config.Configs.cfg", self.cfg, create=False)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _pdf(self, name: str, pages: int, with_text: bool) -> str:
+        path = os.path.join(self.data_dir, name)
+        _make_pdf(path, pages=pages, with_text=with_text)
+        return path
+
+    def test_disabled_without_base_url(self) -> None:
+        with mock.patch("config.Configs.cfg", _Cfg(data_dir="/tmp", base_url=""), create=False):
+            self.assertFalse(ocr_mod.enabled())
+
+    def test_enabled_with_config(self) -> None:
+        self.assertTrue(ocr_mod.enabled())
+
+    def test_text_layer_page_skips_model(self) -> None:
+        pdf = self._pdf("t.pdf", pages=2, with_text=True)
+        calls: list[int] = []
+        with mock.patch.object(ocr_mod, "_call_vision",
+                               new=lambda png, n: calls.append(n) or "x"):
+            blocks, total = ocr_mod.ocr_pdf(pdf, doc_id=900)
+
+        self.assertEqual(total, 2)
+        self.assertEqual(calls, [])          # 有文字层，不该调模型
+        self.assertEqual(len(blocks), 2)
+
+    def test_ocr_result_cached(self) -> None:
+        pdf = self._pdf("s.pdf", pages=1, with_text=False)
+        calls: list[int] = []
+        with mock.patch.object(ocr_mod, "_call_vision",
+                               new=lambda png, n: calls.append(n) or "识别出来的文字"):
+            blocks1, _ = ocr_mod.ocr_pdf(pdf, doc_id=901)
+            blocks2, _ = ocr_mod.ocr_pdf(pdf, doc_id=901)
+
+        self.assertEqual(calls, [1])         # 第二次命中缓存
+        self.assertEqual(blocks1[0]["text"], "识别出来的文字")
+        self.assertEqual(blocks2[0]["text"], "识别出来的文字")
+        self.assertEqual(blocks1[0]["page"], 1)
+
+    def test_all_pages_fail_raises(self) -> None:
+        pdf = self._pdf("f.pdf", pages=2, with_text=False)
+
+        def boom(png, n):
+            raise RuntimeError("gateway 502")
+
+        with mock.patch.object(ocr_mod, "_call_vision", new=boom):
+            with self.assertRaises(RuntimeError) as ctx:
+                ocr_mod.ocr_pdf(pdf, doc_id=902)
+        self.assertIn("一页都没识别成功", str(ctx.exception))
 
 
-def test_disabled_without_base_url(monkeypatch):
-    monkeypatch.setattr("config.Configs.cfg", _Cfg(data_dir="/tmp", base_url=""), raising=False)
-    assert ocr_mod.enabled() is False
-
-
-def test_enabled_with_config(fake_cfg):
-    assert ocr_mod.enabled() is True
-
-
-def test_text_layer_page_skips_model(fake_cfg, tmp_path, monkeypatch):
-    pdf = str(tmp_path / "t.pdf")
-    _make_pdf(pdf, pages=2, with_text=True)
-
-    calls = []
-    monkeypatch.setattr(ocr_mod, "_call_vision", lambda png, n: calls.append(n) or "x")
-    blocks, total = ocr_mod.ocr_pdf(pdf, doc_id=900)
-
-    assert total == 2
-    assert calls == []          # 有文字层，不该调模型
-    assert len(blocks) == 2
-
-
-def test_ocr_result_cached(fake_cfg, tmp_path, monkeypatch):
-    pdf = str(tmp_path / "s.pdf")
-    _make_pdf(pdf, pages=1, with_text=False)
-
-    calls = []
-    monkeypatch.setattr(ocr_mod, "_call_vision", lambda png, n: calls.append(n) or "识别出来的文字")
-    blocks1, _ = ocr_mod.ocr_pdf(pdf, doc_id=901)
-    blocks2, _ = ocr_mod.ocr_pdf(pdf, doc_id=901)
-
-    assert calls == [1]          # 第二次命中缓存
-    assert blocks1[0]["text"] == blocks2[0]["text"] == "识别出来的文字"
-    assert blocks1[0]["page"] == 1
-
-
-def test_all_pages_fail_raises(fake_cfg, tmp_path, monkeypatch):
-    pdf = str(tmp_path / "f.pdf")
-    _make_pdf(pdf, pages=2, with_text=False)
-
-    def boom(png, n):
-        raise RuntimeError("gateway 502")
-
-    monkeypatch.setattr(ocr_mod, "_call_vision", boom)
-    with pytest.raises(RuntimeError, match="一页都没识别成功"):
-        ocr_mod.ocr_pdf(pdf, doc_id=902)
+if __name__ == "__main__":
+    unittest.main()
