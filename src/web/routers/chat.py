@@ -629,16 +629,24 @@ async def get_artifact(session_id: str, filename: str, request: Request,
                         f"或从未生成过。如仍需要，请重新生成一次。")
             as_attachment = wants_attachment(request)
             if "text/html" in (request.headers.get("Accept") or "") and not as_attachment:
+                # 文件名来自 URL，必须转义：以前直接插进 HTML，`<img src=x onerror=...>`
+                # 这类名字会在同源执行脚本（自 XSS）。另加 CSP 兜底。
+                from html import escape as _esc
+
                 html = (
                     '<!doctype html><meta charset="utf-8">'
                     '<title>文件已过期</title>'
                     '<div style="font:16px/1.7 -apple-system,Segoe UI,Microsoft YaHei,sans-serif;'
                     'max-width:640px;margin:12vh auto;padding:0 24px;color:#334155">'
                     '<h2 style="color:#0f172a">文件已过期或不存在</h2>'
-                    f'<p>文件「<b>{name}</b>」可能已超过 {_keep_days} 天保留期被清理，或从未生成过。</p>'
+                    f'<p>文件「<b>{_esc(name)}</b>」可能已超过 {_keep_days} 天保留期被清理，或从未生成过。</p>'
                     '<p>如仍需要，请在对话里让助手重新生成一次。</p></div>'
                 )
-                return HTMLResponse(html, status_code=404)
+                return HTMLResponse(html, status_code=404, headers={
+                    "Content-Security-Policy":
+                        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+                    "X-Content-Type-Options": "nosniff",
+                })
             return JSONResponse({"error": msg}, status_code=404)
 
         as_attachment: bool = wants_attachment(request)

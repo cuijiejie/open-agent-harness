@@ -34,7 +34,7 @@
 |---|---|
 | ![角色与工具授权](docs/assets/screenshot-roles.jpg) | ![登录页](docs/assets/screenshot-login.jpg) |
 
-> 截图来自真实运行实例（`openshell_enabled=false` 的最小可运行模式）。
+> 截图来自真实运行实例。
 
 ## 快速开始
 

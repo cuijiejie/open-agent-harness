@@ -132,10 +132,7 @@ class Configs(object):
         self.kbOcrTimeoutS: int = _get('kb', 'ocr_timeout_s', '120', int)
 
         # OpenShell 沙箱配置（每个登录用户独立的隔离执行环境）
-        # openshell_enabled=false 时 sandbox_shell 工具优雅报错，不影响其他功能
-        self.openshellEnabled: bool = _get(
-            'agent', 'openshell_enabled', 'false',
-            lambda v: str(v).strip().lower() in ('true', '1', 'yes', 'on'))
+        # 沙箱是**必需组件**：没有开关，CLI 不可用时服务拒绝启动（见 app_fastapi.py）
         self.openshellBin: str = _get('agent', 'openshell_bin', '/snap/bin/openshell')
         self.openshellPolicy: str = _get('agent', 'openshell_policy', '')
         # 自定义沙箱镜像（含 python3 等运行时）；留空则用 OpenShell 默认镜像

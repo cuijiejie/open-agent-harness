@@ -311,7 +311,15 @@ class SandboxManager:
     # ------------------------------------------------------------------ #
     @property
     def enabled(self) -> bool:
-        return bool(getattr(cfg, "openshellEnabled", False))
+        """沙箱是否可用
+
+        沙箱是**必需组件**（不再有 `openshell_enabled` 开关）：这里只判断 CLI
+        是否存在。真正缺失时应用在 lifespan 里拒绝启动（见 app_fastapi.py），
+        不会退化成"能聊天但所有执行类工具都不可用"的半残状态。
+        """
+        if not self.bin:
+            return False
+        return os.path.isfile(self.bin) or shutil.which(self.bin) is not None
 
     def sandbox_name(self, username: str) -> str:
         """沙箱名：一个用户一个，且必须满足 gateway 的命名约束
@@ -563,7 +571,10 @@ class SandboxManager:
         外部变化，会出现「沙箱已删但系统以为还在」→ 既不重建也不恢复。
         """
         if not self.enabled:
-            raise RuntimeError("OpenShell 沙箱功能未启用（配置 openshell_enabled=false）")
+            raise RuntimeError(
+                f"OpenShell 沙箱不可用：找不到可执行文件 {self.bin!r}。"
+                "本系统要求沙箱必须可用（见 docs/运维与排查.md「沙箱」）"
+            )
 
         name = self.sandbox_name(username)
 

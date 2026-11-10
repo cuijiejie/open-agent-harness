@@ -52,6 +52,18 @@ async def lifespan(_app: FastAPI):
 
     await init_checkpointer_async()
 
+    # 沙箱是必需组件（没有开关）：CLI 不可用就拒绝启动。
+    # 否则用户能登录、能对话，但所有执行类工具（sandbox_shell / 文件工具 / 技能）
+    # 全部不可用，问题要到第一次执行才暴露 —— 直接把错误挡在启动阶段。
+    from src.agent.backends.sandbox import sandbox_manager as _sb
+
+    if not _sb.enabled:
+        raise RuntimeError(
+            f"OpenShell 沙箱不可用：找不到可执行文件 {_sb.bin!r}。"
+            "本系统要求沙箱必须可用（安装见 docs/运维与排查.md「沙箱」）"
+        )
+    log.info(f"沙箱就绪: bin={_sb.bin}, image={_sb.image or '(OpenShell 默认镜像)'}")
+
     # 知识库：确保 kb 库的表/扩展/索引存在（幂等）。
     # 不放在这里，部署完访问 /api/kb/* 会报 relation "kb_doc" does not exist，
     # 得等第一次跑索引 worker 才有表。可选组件失败不阻断启动。
