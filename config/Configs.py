@@ -193,6 +193,9 @@ class Configs(object):
         # 新账号首次登录时自动分配的默认角色（role_code）
         # 只对**新建档**的账号生效，已有账号不动（管理员手工收回的角色不会被补回）
         self.defaultRole: str = _get('app', 'default_role', 'default')
+        # 跨域：逗号分隔的允许来源；留空 = 同源部署，不发任何 CORS 头
+        # （之前是 allow_origins=["*"] + credentials=true，等于对任意站点开放带凭据读取）
+        self.corsOrigins: str = _get('app', 'cors_origins', '')
         # 接口报错是否回显原始异常（false=只给通用提示，避免泄露内部细节）
         self.errorDetail: bool = _get(
             'app', 'error_detail', 'false',

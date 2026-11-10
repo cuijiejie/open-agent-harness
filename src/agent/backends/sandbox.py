@@ -862,8 +862,9 @@ class SandboxManager:
             name: str = os.path.basename(p)
             if name in _ARTIFACT_SKIP_NAMES:
                 continue
-            if os.path.splitext(name)[1].lower() in _ARTIFACT_SKIP_EXTS:
-                continue
+            # 约定交付目录**不按扩展名过滤**：模型常把报告写成 .csv/.txt/.json，
+            # 之前统一按"中间产物"过滤，导致它说"已生成"但用户拿不到下载链接。
+            # 扩展名黑名单只用于 /sandbox 根目录（防草稿刷屏，见下方）。
             # 同名去重：用父目录名做前缀
             n: int = seen.get(name, 0)
             seen[name] = n + 1
@@ -1454,8 +1455,7 @@ class SandboxManager:
             name: str = os.path.basename(p)
             if name in _ARTIFACT_SKIP_NAMES:
                 continue
-            if os.path.splitext(name)[1].lower() in _ARTIFACT_SKIP_EXTS:
-                continue
+            # 约定交付目录不按扩展名过滤（口径同同步版 list_artifacts）
             n: int = seen.get(name, 0)
             seen[name] = n + 1
             files.append(p)

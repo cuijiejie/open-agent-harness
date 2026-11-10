@@ -105,9 +105,19 @@ app: FastAPI = FastAPI(
     docs_url=None, redoc_url=None, openapi_url=None,     # 不对外暴露文档
 )
 
-# 与 Flask-CORS(app) 默认行为一致
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-                   allow_methods=["*"], allow_headers=["*"])
+# 跨域：默认**不开**（同源部署）。要嵌入到别的站点时，在 [app] cors_origins 里列白名单。
+# 历史配置是 allow_origins=["*"] + allow_credentials=True —— Starlette 会反射任意 Origin
+# 并允许携带 Cookie，等于任何站点都能带凭据读接口；而且规范上这两个选项本身互斥。
+_CORS_ORIGINS: list[str] = [
+    o.strip() for o in str(getattr(cfg, "corsOrigins", "") or "").split(",") if o.strip()
+]
+if _CORS_ORIGINS:
+    _allow_creds: bool = "*" not in _CORS_ORIGINS
+    if not _allow_creds:
+        log.warning('CORS: 白名单里写了 "*"，已自动关闭 allow_credentials（规范不允许两者共存）')
+    app.add_middleware(CORSMiddleware, allow_origins=_CORS_ORIGINS,
+                       allow_credentials=_allow_creds,
+                       allow_methods=["*"], allow_headers=["*"])
 
 # 会话：cookie 名/签名/序列化与 Flask 完全一致 → 切流、回滚都不需要重新登录
 app.add_middleware(FlaskCompatibleSessionMiddleware, secret_key=cfg.secretKey)
