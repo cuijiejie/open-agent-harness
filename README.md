@@ -26,15 +26,29 @@
 
 ![对话：流式输出 + Markdown 表格渲染](docs/assets/screenshot-chat.jpg)
 
-| 技能与工具 | 用户管理 |
+| 知识库：上传即索引，检索带出处 | 轨迹：每次工具调用都可回看 |
 |---|---|
-| ![技能与工具](docs/assets/screenshot-skills.jpg) | ![用户管理](docs/assets/screenshot-users.jpg) |
+| ![知识库](docs/assets/screenshot-kb.jpg) | ![轨迹](docs/assets/screenshot-trace.jpg) |
 
-| 角色与工具授权 | 登录页 |
+| 技能与工具 | 工具管理（按角色授权） |
 |---|---|
-| ![角色与工具授权](docs/assets/screenshot-roles.jpg) | ![登录页](docs/assets/screenshot-login.jpg) |
+| ![技能与工具](docs/assets/screenshot-skills.jpg) | ![工具管理](docs/assets/screenshot-tools.jpg) |
 
-> 截图来自真实运行实例。
+| 用户管理 | 角色与工具授权 |
+|---|---|
+| ![用户管理](docs/assets/screenshot-users.jpg) | ![角色与工具授权](docs/assets/screenshot-roles.jpg) |
+
+![登录页](docs/assets/screenshot-login.jpg)
+
+> 截图与演示视频均来自真实运行实例（1920×1080）。
+
+## 演示视频
+
+真机操作 + 中文旁白，84 秒走完对话、工具、用户、角色、知识库、轨迹六条主链路：
+
+▶ [docs/assets/demo.mp4](docs/assets/demo.mp4)（1080p30，6.3 MB）
+
+> 片头由 ComfyUI（Wan2.1 FLF2V）生成，其余画面为线上实例实录。
 
 ## 快速开始
 
