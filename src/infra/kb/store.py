@@ -51,6 +51,9 @@ _INDEX_DDL: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_kb_task_state ON kb_task (state, updated_at)",
 )
 
+# 建表串行化用的 advisory lock key（任意常量，只要全仓库一致）
+_SCHEMA_LOCK_ID: int = 918273645
+
 
 def _dsn() -> str:
     from config.Configs import cfg
@@ -76,17 +79,26 @@ def pool():
 
 
 def ensure_schema() -> bool:
-    """建业务表 + 关键词检索用的 pg_trgm，并让 LlamaIndex 建好向量表（幂等）"""
+    """建业务表 + 关键词检索用的 pg_trgm，并让 LlamaIndex 建好向量表（幂等）
+
+    4 个 uvicorn worker 会同时进这里，`CREATE INDEX IF NOT EXISTS` 在 PG 里不是原子的
+    —— 并发下会撞 `duplicate key ... already exists`。所以用会话级 advisory lock
+    把建表串行化：同一时刻只有一个 worker 在改 schema，其余等它做完再检查一遍。
+    """
     try:
         with pool().connection() as c:
             c.autocommit = True
             with c.cursor() as cur:
-                cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
-                cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-                for sql in _TABLE_DDL:
-                    cur.execute(sql)
-                for sql in _INDEX_DDL:
-                    cur.execute(sql)
+                cur.execute("SELECT pg_advisory_lock(%s)", (_SCHEMA_LOCK_ID,))
+                try:
+                    cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                    cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+                    for sql in _TABLE_DDL:
+                        cur.execute(sql)
+                    for sql in _INDEX_DDL:
+                        cur.execute(sql)
+                finally:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (_SCHEMA_LOCK_ID,))
         # 向量表/扩展/索引由 PGVectorStore 自己维护；这里 add([]) 触发一次初始化，
         # 否则部署完访问 /api/kb/* 时表还不存在（PGVectorStore 是懒建表）
         from src.infra.kb import index as kb_index

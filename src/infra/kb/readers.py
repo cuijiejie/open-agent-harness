@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from llama_index.core import Document
@@ -149,6 +150,38 @@ def _docx_documents(path: str) -> tuple[list[Document], int]:
     return docs, 0
 
 
+_PPTX_DECOR = re.compile(r"^[-—=*#_\s]+$")
+
+
+def _clean_pptx(text: str) -> str:
+    """清理 PptxReader 的排版噪声
+
+    PptxReader 的原文长这样：
+        Title: 04 / 19
+        -----
+        **THE EQUATION / 核心公式**
+        #
+        ...
+    占位符名（Title:）、分隔线（-----）、单独的 # / ** 对语义没有贡献，
+    却会稀释嵌入向量 —— 实测清掉后同类查询的相关页排名明显上升。
+    """
+    lines: list[str] = []
+    for raw in (text or "").splitlines():
+        s = raw.strip()
+        if not s or s.startswith("Title:"):
+            continue
+        if _PPTX_DECOR.match(s):
+            continue
+        s = s.replace("**", "").strip()
+        if not s:
+            continue
+        # 标题常被 reader 抄两遍（占位名 + 正文），连着重复的只留一条
+        if lines and lines[-1].strip("*# ") == s.strip("*# "):
+            continue
+        lines.append(s)
+    return "\n".join(lines)
+
+
 def _load_raw(path: str) -> tuple[list[Document], int]:
     """各格式的原生读取，返回 (documents, 总页数)"""
     ext = os.path.splitext(path)[1].lower()
@@ -175,7 +208,7 @@ def _load_raw(path: str) -> tuple[list[Document], int]:
             merged: list[Document] = []
             for i, d in enumerate(docs, 1):
                 extra = tables.get(i) or []
-                text = d.text or ""
+                text = _clean_pptx(d.text or "")
                 if extra:
                     text = text + "\n" + "\n".join(extra)
                 merged.append(Document(text=text, metadata=dict(d.metadata or {})))
