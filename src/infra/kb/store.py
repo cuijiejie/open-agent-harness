@@ -87,10 +87,11 @@ def ensure_schema() -> bool:
                     cur.execute(sql)
                 for sql in _INDEX_DDL:
                     cur.execute(sql)
-        # 向量表/扩展/索引由 PGVectorStore 自己维护
+        # 向量表/扩展/索引由 PGVectorStore 自己维护；这里 add([]) 触发一次初始化，
+        # 否则部署完访问 /api/kb/* 时表还不存在（PGVectorStore 是懒建表）
         from src.infra.kb import index as kb_index
 
-        kb_index.vector_store()
+        kb_index.vector_store().add([])
         return True
     except Exception as e:
         log.error(f"知识库建表失败: {e}", exc_info=True)

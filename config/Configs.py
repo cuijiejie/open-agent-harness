@@ -116,7 +116,7 @@ class Configs(object):
         self.kbEmbedUrl: str = _get('kb', 'embed_url', 'http://127.0.0.1:5110')
         self.kbDim: int = _get('kb', 'dim', '768', int)
         self.kbRerankTimeoutMs: int = _get('kb', 'rerank_timeout_ms', '200', int)
-        # 向量表（LlamaIndex 自建：<table> 元数据表 + data_<table> 节点表）
+        # 向量表（LlamaIndex 自建 data_<table>，本项是表名主体）
         self.kbTableName: str = _get('kb', 'table_name', 'kb_nodes')
         # 切分与召回（chunk 长度按字符计，中文友好）
         self.kbChunkSize: int = _get('kb', 'chunk_size', '700', int)

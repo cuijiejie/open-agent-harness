@@ -98,7 +98,9 @@ def scope_filters(owner: str) -> MetadataFilters:
 class KeywordRetriever(BaseRetriever):
     """关键词召回：pg_trgm + ILIKE，按「命中词数 → 相似度」排序"""
 
-    owner: str = ""
+    def __init__(self, owner: str = "", **kwargs) -> None:
+        self._owner = owner
+        super().__init__(**kwargs)
 
     def _retrieve(self, query_bundle: QueryBundle) -> list[NodeWithScore]:
         q = (query_bundle.query_str or "").strip()
@@ -111,7 +113,7 @@ class KeywordRetriever(BaseRetriever):
 
         like_terms = [f"%{t}%" for t in ts]
         sql = (
-            "SELECT id, text, metadata_, similarity(text, %s) AS sim "
+            "SELECT node_id, text, metadata_, similarity(text, %s) AS sim "
             f"FROM {kb_index.data_table()} "
             "WHERE (metadata_->>'scope' = 'global' "
             "       OR (metadata_->>'scope' = 'user' AND metadata_->>'owner' = %s)) "
@@ -119,7 +121,7 @@ class KeywordRetriever(BaseRetriever):
             "ORDER BY sim DESC LIMIT 300"
         )
         with store.pool().connection() as c, c.cursor() as cur:
-            cur.execute(sql, (q, self.owner, like_terms, q))
+            cur.execute(sql, (q, self._owner, like_terms, q))
             rows = cur.fetchall()
 
         scored: list[tuple[float, tuple]] = []
@@ -134,8 +136,9 @@ class KeywordRetriever(BaseRetriever):
 
         out: list[NodeWithScore] = []
         for score, r in scored[:KW_TOP]:
-            meta = r[2] or {}
-            node = TextNode(id_=str(r[0]), text=r[1] or "", metadata=meta)
+            meta = dict(r[2] or {})
+            # node_id 必须和向量库里的 node_id 一致，否则 RRF 融合时同一片段会被算两条
+            node = TextNode(id_=str(r[0] or ""), text=r[1] or "", metadata=meta)
             out.append(NodeWithScore(node=node, score=float(score)))
         return out
 
@@ -198,7 +201,7 @@ def search(query: str, owner: str, top_k: int = 5, use_rerank: bool = True) -> l
         meta = n.node.metadata or {}
         items.append({
             "chunk_id": n.node.node_id,
-            "doc_id": meta.get("doc_id"),
+            "doc_id": meta.get("kb_doc_id"),
             "doc": meta.get("filename") or "",
             "page": meta.get("page"),
             "section": meta.get("section") or "",

@@ -215,7 +215,7 @@ def _stamp(docs: list[Document], *, doc_id: int, filename: str, scope: str, owne
         section = str(meta.get("section") or "").strip() or _first_line(text)
         # ref_doc_id 由 id_ 派生：整篇删除（重建索引）靠它
         out.append(Document(text=text, id_=f"{doc_id}:{i}", metadata={
-            "doc_id": int(doc_id),
+            "kb_doc_id": int(doc_id),
             "scope": scope,
             "owner": owner,
             "filename": filename,

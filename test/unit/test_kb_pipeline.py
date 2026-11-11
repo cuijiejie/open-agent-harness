@@ -63,7 +63,7 @@ class TestReaders(unittest.TestCase):
         docs, pages = readers.load(p, doc_id=42, filename="制度.md", scope="user", owner="alice")
         self.assertEqual(len(docs), 1)
         meta = docs[0].metadata
-        self.assertEqual(meta["doc_id"], 42)
+        self.assertEqual(meta["kb_doc_id"], 42)
         self.assertEqual(meta["scope"], "user")
         self.assertEqual(meta["owner"], "alice")
         self.assertEqual(meta["filename"], "制度.md")

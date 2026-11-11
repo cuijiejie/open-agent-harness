@@ -40,17 +40,30 @@ def vector_store():
         return _store
 
     from llama_index.vector_stores.postgres import PGVectorStore
+    from sqlalchemy.engine.url import URL
 
-    _store = PGVectorStore.from_params(
-        database=str(_cfg("kbPgDb", "kb")),
-        host=str(_cfg("kbPgHost", "127.0.0.1")),
-        port=str(int(_cfg("kbPgPort", 5432))),
-        user=str(_cfg("kbPgUser", "postgres")),
-        password=str(_cfg("kbPgPass", "")),
+    def _url(driver: str) -> str:
+        """拼连接串：口令里有 @ : / 时也不会解析错"""
+        u = URL.create(
+            driver,
+            username=str(_cfg("kbPgUser", "postgres")),
+            password=str(_cfg("kbPgPass", "")),
+            host=str(_cfg("kbPgHost", "127.0.0.1")),
+            port=int(_cfg("kbPgPort", 5432)),
+            database=str(_cfg("kbPgDb", "kb")),
+        )
+        return u.render_as_string(hide_password=False)
+
+    _store = PGVectorStore(
+        # 同步引擎（写入/同步查询）与异步引擎（as_retriever 内部走 async）都要给，
+        # 只给 connection_string 时 PGVectorStore 会拿它去建 asyncpg 引擎而解析失败
+        connection_string=_url("postgresql+psycopg2"),
+        async_connection_string=_url("postgresql+asyncpg"),
         table_name=table_name(),
         embed_dim=int(_cfg("kbDim", 768)),
         use_jsonb=True,          # metadata_ 用 JSONB：中文键值/嵌套过滤都安全
         perform_setup=True,      # 建表 + CREATE EXTENSION vector
+        initialization_fail_on_error=True,   # 建不出来就直接报错，别静默降级
         hnsw_kwargs={
             "hnsw_m": 16,
             "hnsw_ef_construction": 64,
@@ -67,10 +80,24 @@ def index() -> VectorStoreIndex:
 
 
 def add_documents(docs: list[Document]) -> int:
-    """切分 + 写入；返回写入的节点数"""
+    """切分 + 嵌入 + 写入；返回写入的节点数
+
+    用 IngestionPipeline 而不是自己先切分再塞库：
+    PGVectorStore.add 要求 node.embedding 已经算好，pipeline 会把
+    「切分 → 批量嵌入」串起来（走 Settings.embed_model，即本地 5110 服务）。
+    """
+    from llama_index.core import Settings
+    from llama_index.core.ingestion import IngestionPipeline
+
     from src.infra.kb import settings as kb_settings
 
-    nodes = kb_settings.splitter().get_nodes_from_documents(docs)
+    if not docs:
+        return 0
+
+    pipeline = IngestionPipeline(
+        transformations=[kb_settings.splitter(), Settings.embed_model],
+    )
+    nodes = pipeline.run(documents=docs)
     if not nodes:
         return 0
     vector_store().add(nodes)
@@ -88,7 +115,7 @@ def delete_doc(doc_id: int) -> None:
     try:
         with store.pool().connection() as c, c.cursor() as cur:
             cur.execute(
-                f"DELETE FROM {data_table()} WHERE (metadata_->>'doc_id')::bigint = %s",
+                f"DELETE FROM {data_table()} WHERE (metadata_->>'kb_doc_id')::bigint = %s",
                 (int(doc_id),),
             )
             removed = cur.rowcount
