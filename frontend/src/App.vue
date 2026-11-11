@@ -4595,13 +4595,18 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 
 /* ==== 我的技能面板 ==== */
 /* 次操作：淡紫底 + 描边（和主操作区分，但同样有色） */
-.sidebar-skill-btn {
+/* 次级入口（技能与工具 / 知识库）用同一套浅底样式；
+   只有「新对话」保留实心靛蓝渐变，避免侧栏里出现两块同色的实心按钮 */
+.sidebar-skill-btn,
+.sidebar-kb-btn {
   margin-top: 8px;
   background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
   color: #4338ca;
   border: 1px solid #c7d2fe;
   box-shadow: none;
 }
+.sidebar-skill-btn:hover,
+.sidebar-kb-btn:hover { background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%); }
 .sidebar-skill-btn:hover {
   background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
   color: #3730a3;
