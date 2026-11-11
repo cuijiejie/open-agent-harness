@@ -97,13 +97,14 @@ def ensure_schema() -> bool:
                         cur.execute(sql)
                     for sql in _INDEX_DDL:
                         cur.execute(sql)
+                    # 向量表/扩展/索引由 PGVectorStore 自己维护；add([]) 触发它的懒建表。
+                    # 这一步也必须在锁内：它内部是 CREATE TABLE IF NOT EXISTS，同样扛不住
+                    # 4 个 worker 同时进（会撞 pg_type_typname_nsp_index）。
+                    from src.infra.kb import index as kb_index
+
+                    kb_index.vector_store().add([])
                 finally:
                     cur.execute("SELECT pg_advisory_unlock(%s)", (_SCHEMA_LOCK_ID,))
-        # 向量表/扩展/索引由 PGVectorStore 自己维护；这里 add([]) 触发一次初始化，
-        # 否则部署完访问 /api/kb/* 时表还不存在（PGVectorStore 是懒建表）
-        from src.infra.kb import index as kb_index
-
-        kb_index.vector_store().add([])
         return True
     except Exception as e:
         log.error(f"知识库建表失败: {e}", exc_info=True)
