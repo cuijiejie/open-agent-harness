@@ -633,17 +633,18 @@
             <!-- ===== 文档资料（RAG）===== -->
             <template v-else>
               <div class="know-add">
-                <input ref="kbFileInput" type="file" class="kb-file"
+                <input id="kbFileInput" ref="kbFileInput" type="file" class="kb-file"
                        accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.txt,.md,.csv" @change="onKbFilePicked" />
+                <label for="kbFileInput" class="kb-file-btn">选择文件</label>
                 <select v-model="kbScope" class="rbac-input kb-scope" @change="kbScopeTouched = true">
-                  <option value="user">个人（仅自己可见）</option>
-                  <option v-if="isAdmin" value="global">全局（全员可读，仅管理员可传）</option>
+                  <option value="user">个人</option>
+                  <option v-if="isAdmin" value="global">全局</option>
                 </select>
                 <button type="button" class="btn-primary"
                         :disabled="kbUploading || !kbFile" @click="uploadKbDoc">
                   {{ kbUploading ? '上传中…' : '上传并索引' }}
                 </button>
-                <span class="kb-hint">{{ kbFileName || 'PDF / Word / Excel / PPT，≤20MB，上传后排队索引' }}</span>
+                <span class="kb-hint">{{ kbFileName || 'PDF / Word / Excel / PPT，≤20MB' }}</span>
               </div>
 
               <div class="know-add">
@@ -4123,8 +4124,15 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
   display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 8px;
   font-size: 11px; background: rgba(255,255,255,.28);
 }
-.kb-file { font-size: 12.5px; color: #475569; max-width: 320px; }
-.kb-scope { width: 220px; }
+.kb-file { display: none; }               /* 原生控件藏起来，用下面的按钮代替 */
+.kb-file-btn {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border: 1px solid #d8dde6; border-radius: 8px;
+  background: #fff; color: #334155; font-size: 13px; cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.kb-file-btn:hover { border-color: #8b7cf6; color: #4f46e5; background: #f8f7ff; }
+.kb-scope { flex: 0 0 auto; width: auto; min-width: 84px; }
 .kb-hint { font-size: 12px; color: #94a3b8; }
 
 /* 检索结果 */
