@@ -32,7 +32,9 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-EMBED_MODEL: str = os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-large")
+EMBED_MODEL: str = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
+# 非空 = 用本地 ONNX 目录跑（bge-m3 走这条：fastembed 不支持它，但官方仓库带 onnx 权重）
+EMBED_ONNX_DIR: str = os.getenv("EMBED_ONNX_DIR", "").strip()
 # e5 系列必须区分查询/文档前缀（query: / passage:），否则效果打折
 _PREFIX: dict[str, str] = ({"query": "query: ", "passage": "passage: "}
                            if "e5" in EMBED_MODEL.lower() else {})
@@ -57,15 +59,23 @@ def _ensure_embed() -> None:
     """加载嵌入模型（启动时必须成功，否则 /health 503）"""
     if _state["embed"] is not None:
         return
-    from fastembed import TextEmbedding
 
     with _embed_lock:
         if _state["embed"] is not None:
             return
         try:
-            _state["embed"] = TextEmbedding(model_name=EMBED_MODEL, threads=THREADS)
-            probe = next(iter(_state["embed"].embed(["向量维度探测"])))
-            _state["dim"] = int(len(probe))
+            if EMBED_ONNX_DIR:
+                from src.kb_onnx_encoder import OnnxBgeEncoder
+
+                enc = OnnxBgeEncoder(EMBED_ONNX_DIR, threads=THREADS)
+                _state["embed"] = enc
+                _state["dim"] = int(enc.dim)
+            else:
+                from fastembed import TextEmbedding
+
+                _state["embed"] = TextEmbedding(model_name=EMBED_MODEL, threads=THREADS)
+                probe = next(iter(_state["embed"].embed(["向量维度探测"])))
+                _state["dim"] = int(len(probe))
             _state["loaded_at"] = time.time()
         except Exception as e:                     # 模型没下载/路径错
             _state["embed_err"] = f"{type(e).__name__}: {e}"
@@ -122,6 +132,7 @@ def health() -> JSONResponse:
     return JSONResponse({
         "ok": ok,
         "embedding_model": EMBED_MODEL,
+        "backend": "onnx" if EMBED_ONNX_DIR else "fastembed",
         "rerank_model": RERANK_MODEL if _state["rerank"] is not None else "",
         "dim": _state["dim"],
         "embed_error": _state["embed_err"],
