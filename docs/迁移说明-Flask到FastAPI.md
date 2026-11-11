@@ -120,7 +120,7 @@ Redis 连接失败, 限流/去重降级为放行: SELECT is not allowed in clust
 ```
 
 **根因**：`configs.cfg` 写成单机模式（`redis_cluster = false`，`redis_host = 127.0.0.1`），
-但本机根本没有 Redis；真实环境是 **Redis Cluster**（`redis-1.internal/81/82:6379`）。
+但本机根本没有 Redis；真实环境是 **Redis Cluster**（`redis-1/2/3.internal:6379`）。
 单机客户端会发 `SELECT 0`，集群节点直接拒绝。
 
 **为什么"静默"**：`RedisUtil.available=False` 时，限流放行、去重放行、缓存返回 None，
