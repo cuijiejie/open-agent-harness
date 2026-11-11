@@ -100,7 +100,7 @@ uvicorn src.app_fastapi:app --host 0.0.0.0 --port 5001 --workers 4   # http://lo
 [`docs/架构说明.md`](docs/架构说明.md)；
 
 文档知识库（RAG + 扫描件 OCR）见 [`docs/知识库部署说明.md`](docs/知识库部署说明.md)；
-偏好 / 规则与口径 / 文档资料三层怎么分工见 [`docs/知识分层说明.md`](docs/知识分层说明.md)。
+偏好 / 业务知识 / 文档资料三层怎么分工见 [`docs/知识分层说明.md`](docs/知识分层说明.md)。
 
 ## 目录结构
 
