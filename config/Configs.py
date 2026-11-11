@@ -114,7 +114,7 @@ class Configs(object):
         self.kbMaxConns: int = _get('kb', 'max_conns', '4', int)
         # 本地嵌入/重排服务（独立进程，见 src/kb_embed_server.py）
         self.kbEmbedUrl: str = _get('kb', 'embed_url', 'http://127.0.0.1:5110')
-        self.kbDim: int = _get('kb', 'dim', '768', int)
+        self.kbDim: int = _get('kb', 'dim', '1024', int)
         self.kbRerankTimeoutMs: int = _get('kb', 'rerank_timeout_ms', '200', int)
         # 向量表（LlamaIndex 自建 data_<table>，本项是表名主体）
         self.kbTableName: str = _get('kb', 'table_name', 'kb_nodes')

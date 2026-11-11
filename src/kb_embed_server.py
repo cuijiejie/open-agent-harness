@@ -32,7 +32,10 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-EMBED_MODEL: str = os.getenv("EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
+EMBED_MODEL: str = os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-large")
+# e5 系列必须区分查询/文档前缀（query: / passage:），否则效果打折
+_PREFIX: dict[str, str] = ({"query": "query: ", "passage": "passage: "}
+                           if "e5" in EMBED_MODEL.lower() else {})
 # 重排是可选项：设为 none / off / 空 = 不加载（CPU 机器上建议关掉）
 # 实测（8 核无 GPU，两个模型同进程）：重排加载后内存打满 2G，单条文本嵌入从
 # 1.2s 掉到 8s；20 段重排 3.2s，而检索侧的重排超时是 200ms，等于白占资源
@@ -96,6 +99,8 @@ def _load() -> None:
 class EmbedIn(BaseModel):
     texts: list[str]
     batch: int = 32
+    # e5 系列要求查询和文档用不同前缀（query: / passage:），其它模型不加
+    kind: str = "passage"
 
 
 class RerankIn(BaseModel):
@@ -134,7 +139,9 @@ def embed(body: EmbedIn) -> JSONResponse:
     if not texts:
         return JSONResponse({"vectors": [], "dim": _state["dim"]})
     try:
-        vecs = [list(map(float, v)) for v in model.embed(texts, batch_size=body.batch)]
+        prefix = _PREFIX.get(str(body.kind or "passage").strip().lower(), "")
+        payload = [f"{prefix}{t}" for t in texts]
+        vecs = [list(map(float, v)) for v in model.embed(payload, batch_size=body.batch)]
     except Exception as e:
         return JSONResponse({"error": f"嵌入失败：{e}"}, status_code=500)
     return JSONResponse({"vectors": vecs, "dim": _state["dim"], "count": len(vecs)})

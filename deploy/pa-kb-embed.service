@@ -17,7 +17,7 @@ Environment=FASTEMBED_CACHE_PATH=/var/lib/oah-embed
 Environment=HF_HUB_OFFLINE=1
 # fastembed 0.4.2 里没有 bge-base-zh-v1.5；bge-small-zh 只有 Google Storage 源
 # 这个模型有 HF 源、768 维，内网可离线部署
-Environment=EMBED_MODEL=sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+Environment=EMBED_MODEL=intfloat/multilingual-e5-large
 # 重排默认关闭：无 GPU 时两个模型同进程会打满内存，嵌入从 0.3s 掉到 8s
 # 有 GPU / 机器够强时改成 BAAI/bge-reranker-base
 Environment=RERANK_MODEL=none

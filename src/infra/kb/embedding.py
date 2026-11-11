@@ -52,12 +52,16 @@ def health() -> dict:
         return {"ok": False, "detail": str(e)}
 
 
-def embed_texts(texts: list[str], batch: int = 32) -> list[list[float]]:
-    """批量嵌入；自动分批（一次 32 条，避免请求体过大）"""
+def embed_texts(texts: list[str], batch: int = 32, kind: str = "passage") -> list[list[float]]:
+    """批量嵌入；自动分批（一次 32 条，避免请求体过大）
+
+    kind: query = 查询，passage = 文档。e5 系列靠这个前缀区分两侧语义，
+    其它模型服务端会忽略。
+    """
     out: list[list[float]] = []
     for i in range(0, len(texts), max(1, batch)):
         part = texts[i:i + batch]
-        data = _post("/embed", {"texts": part}, timeout=120)
+        data = _post("/embed", {"texts": part, "kind": kind}, timeout=120)
         vecs = data.get("vectors") or []
         if len(vecs) != len(part):
             raise RuntimeError(f"嵌入返回数量不符：{len(vecs)} != {len(part)}")
@@ -92,11 +96,11 @@ class LocalEmbedding(BaseEmbedding):
 
     batch_size: int = 32
 
-    def _embed(self, texts: list[str]) -> list[list[float]]:
-        return embed_texts(texts, batch=self.batch_size)
+    def _embed(self, texts: list[str], kind: str = "passage") -> list[list[float]]:
+        return embed_texts(texts, batch=self.batch_size, kind=kind)
 
     def _get_query_embedding(self, query: str) -> list[float]:
-        return self._embed([query])[0]
+        return self._embed([query], kind="query")[0]
 
     def _get_text_embedding(self, text: str) -> list[float]:
         return self._embed([text])[0]
