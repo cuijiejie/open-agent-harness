@@ -87,19 +87,21 @@ def add_documents(docs: list[Document]) -> int:
     「切分 → 批量嵌入」串起来（走 Settings.embed_model，即本地 5110 服务）。
     """
     from llama_index.core import Settings
-    from llama_index.core.ingestion import IngestionPipeline
 
     from src.infra.kb import settings as kb_settings
 
     if not docs:
         return 0
 
-    pipeline = IngestionPipeline(
-        transformations=[kb_settings.splitter(), Settings.embed_model],
-    )
-    nodes = pipeline.run(documents=docs)
+    nodes = kb_settings.split_documents(docs)
     if not nodes:
         return 0
+    # 显式批量嵌入：PGVectorStore.add 要求 node.embedding 已存在；
+    # 这里不用 IngestionPipeline，是因为要先把超长块压到上限内再嵌入
+    vectors = Settings.embed_model.get_text_embedding_batch(
+        [n.get_content() for n in nodes], show_progress=False)
+    for node, vec in zip(nodes, vectors):
+        node.embedding = vec
     vector_store().add(nodes)
     return len(nodes)
 

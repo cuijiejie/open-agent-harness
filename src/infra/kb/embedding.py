@@ -52,7 +52,7 @@ def health() -> dict:
         return {"ok": False, "detail": str(e)}
 
 
-def embed_texts(texts: list[str], batch: int = 32, kind: str = "passage") -> list[list[float]]:
+def embed_texts(texts: list[str], batch: int = 8, kind: str = "passage") -> list[list[float]]:
     """批量嵌入；自动分批（一次 32 条，避免请求体过大）
 
     kind: query = 查询，passage = 文档。e5 系列靠这个前缀区分两侧语义，
@@ -61,7 +61,7 @@ def embed_texts(texts: list[str], batch: int = 32, kind: str = "passage") -> lis
     out: list[list[float]] = []
     for i in range(0, len(texts), max(1, batch)):
         part = texts[i:i + batch]
-        data = _post("/embed", {"texts": part, "kind": kind}, timeout=120)
+        data = _post("/embed", {"texts": part, "kind": kind}, timeout=300)
         vecs = data.get("vectors") or []
         if len(vecs) != len(part):
             raise RuntimeError(f"嵌入返回数量不符：{len(vecs)} != {len(part)}")
@@ -94,7 +94,7 @@ def rerank(query: str, docs: list[str], timeout_ms: int = 200) -> list[float] | 
 class LocalEmbedding(BaseEmbedding):
     """把本地 HTTP 嵌入服务包装成 LlamaIndex 的 Embedding"""
 
-    batch_size: int = 32
+    batch_size: int = 8
 
     def _embed(self, texts: list[str], kind: str = "passage") -> list[list[float]]:
         return embed_texts(texts, batch=self.batch_size, kind=kind)

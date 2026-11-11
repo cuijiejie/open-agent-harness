@@ -119,8 +119,8 @@ class Configs(object):
         # 向量表（LlamaIndex 自建 data_<table>，本项是表名主体）
         self.kbTableName: str = _get('kb', 'table_name', 'kb_nodes')
         # 切分与召回（chunk 长度按字符计，中文友好）
-        self.kbChunkSize: int = _get('kb', 'chunk_size', '700', int)
-        self.kbChunkOverlap: int = _get('kb', 'chunk_overlap', '100', int)
+        self.kbChunkSize: int = _get('kb', 'chunk_size', '350', int)
+        self.kbChunkOverlap: int = _get('kb', 'chunk_overlap', '60', int)
         self.kbVecTop: int = _get('kb', 'vec_top', '40', int)
         self.kbFuseTop: int = _get('kb', 'fuse_top', '20', int)
         # 上传与索引

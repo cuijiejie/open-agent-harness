@@ -39,8 +39,8 @@ def configure(force: bool = False) -> None:
 
     Settings.embed_model = LocalEmbedding()
     Settings.node_parser = SentenceSplitter(
-        chunk_size=int(getattr(cfg, "kbChunkSize", 700)),
-        chunk_overlap=int(getattr(cfg, "kbChunkOverlap", 100)),
+        chunk_size=int(getattr(cfg, "kbChunkSize", 350)),
+        chunk_overlap=int(getattr(cfg, "kbChunkOverlap", 60)),
         paragraph_separator="\n\n",
         # 中文句末标点优先断句，避免把「指标 16737.30 亿元」从中间切开
         secondary_chunking_regex="[^。！？；!?;\n]+[。！？；!?;]?",
@@ -59,3 +59,38 @@ def splitter() -> SentenceSplitter:
     parser = Settings.node_parser
     assert isinstance(parser, SentenceSplitter)
     return parser
+
+
+def split_documents(docs):
+    """切分并强制单块不超过 chunk_size
+
+    为什么还要兜一道：SentenceSplitter 只在“句子边界”断句，一段没有标点的长文本
+    （测试报告、日志、表格导出）会被整段保留。实测 700 字上限下出现过 1138 字的块，
+    而 bge-m3 的输入上限是 512 token —— 超了就被 truncate，尾部内容直接丢失，
+    既影响检索也浪费算力（一次 512 token 的推理在这里要 9 秒）。
+    """
+    from llama_index.core.schema import TextNode
+
+    from config.Configs import cfg
+
+    cap = max(80, int(getattr(cfg, "kbChunkSize", 350)))
+    overlap = max(0, min(int(getattr(cfg, "kbChunkOverlap", 60)), cap // 2))
+    nodes = splitter().get_nodes_from_documents(docs)
+
+    out = []
+    for n in nodes:
+        text = n.get_content()
+        if len(text) <= cap:
+            out.append(n)
+            continue
+        step = max(1, cap - overlap)
+        for start in range(0, len(text), step):
+            piece = text[start:start + cap]
+            if not piece.strip():
+                continue
+            out.append(TextNode(
+                text=piece,
+                metadata=dict(n.metadata or {}),
+                ref_doc_id=n.ref_doc_id,
+            ))
+    return out
