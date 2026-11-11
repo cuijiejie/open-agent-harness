@@ -46,6 +46,10 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 5.2 5.6.8-4 4 1 5.6L12 15l-5 2.6 1-5.6-4-4 5.6-.8z"/></svg>
             <span>技能与工具</span>
           </button>
+          <button type="button" @click="openKb" class="sidebar-new-btn sidebar-kb-btn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+            <span>知识库</span>
+          </button>
           <button type="button" v-if="rbacCanManage" @click="toggleSysMenu" class="sidebar-new-btn sidebar-sys-btn">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 008 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 003.6 15a1.65 1.65 0 00-1.51-1H2a2 2 0 010-4h.09A1.65 1.65 0 003.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 008 4.6 1.65 1.65 0 009 3.09V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9v.09a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
             <span>系统设置</span>
@@ -59,7 +63,6 @@
             <div :class="['sys-menu-item', { active: sysOpen && sysTab === 'users' }]" @click="openSysTab('users')">用户管理</div>
             <div :class="['sys-menu-item', { active: sysOpen && sysTab === 'roles' }]" @click="openSysTab('roles')">角色管理</div>
             <div :class="['sys-menu-item', { active: sysOpen && sysTab === 'tools' }]" @click="openSysTab('tools')">工具管理</div>
-            <div :class="['sys-menu-item', { active: sysOpen && sysTab === 'knowledge' }]" @click="openSysTab('knowledge')">知识库</div>
             <div :class="['sys-menu-item', { active: sysOpen && sysTab === 'audit' }]" @click="openSysTab('audit')">操作审计</div>
           </div>
         </div>
@@ -631,7 +634,7 @@
                        accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.txt,.md,.csv" @change="onKbFilePicked" />
                 <select v-model="kbScope" class="rbac-input kb-scope">
                   <option value="user">个人（仅自己可见）</option>
-                  <option value="global">全局（全员可读，仅管理员可传）</option>
+                  <option v-if="isAdmin" value="global">全局（全员可读，仅管理员可传）</option>
                 </select>
                 <button type="button" class="btn-primary"
                         :disabled="kbUploading || !kbFile" @click="uploadKbDoc">
@@ -2179,6 +2182,12 @@ const openSysTab = async (tab) => {
   else if (key === 'sys-users') await loadRbac()
   else if (key === 'sys-roles') await loadCatalog()
   else if (key === 'sys-tools') { toolsLoaded.value = true; await loadTools() }
+}
+
+// 知识库是一级入口：普通用户也能进（规则与口径看自己的 + 共享；文档资料同理）
+const openKb = async () => {
+  openTab('sys-knowledge')
+  await Promise.all([loadAdminKnowledge(), loadKbStats()])
 }
 
 const closeSys = () => { activeTab.value = 'chat' }
