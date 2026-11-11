@@ -50,7 +50,7 @@ def kb_stats(username: str = Depends(require_login)):
     from src.infra.kb import store
 
     try:
-        s = store.stats()
+        s = store.stats(username)          # 只统计调用者能看到的文档；docs_total 是全库
         return JSONResponse({"ok": True, **s, "embed": embed_cli.health()})
     except Exception as e:
         log.error(f"知识库统计失败: {e}", exc_info=True)

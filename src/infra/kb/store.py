@@ -243,15 +243,33 @@ def finish_task(task_id: int, ok: bool, error: str = "") -> None:
         c.commit()
 
 
-def stats() -> dict:
+def stats(owner: str | None = None) -> dict:
+    """统计口径按"调用者能看到什么"算
+
+    不传 owner（后台脚本/worker）时算全库；传 owner 时只算
+    `scope=global ∪ (scope=user ∧ owner=本人)` —— 否则普通用户在界面上会看到
+    别人的文档数量（徽标显示 1，列表却是空的，很容易被当成 bug）。
+    """
+    vis = "(scope='global' OR (scope='user' AND owner=%s))"
     with pool().connection() as c, c.cursor() as cur:
-        cur.execute("SELECT count(*), coalesce(sum(chunks),0) FROM kb_doc WHERE status='indexed'")
+        if owner is None:
+            cur.execute("SELECT count(*), coalesce(sum(chunks),0) FROM kb_doc WHERE status='indexed'")
+        else:
+            cur.execute(f"SELECT count(*), coalesce(sum(chunks),0) FROM kb_doc "
+                        f"WHERE status='indexed' AND {vis}", (owner,))
         docs, chunks = cur.fetchone()
-        cur.execute("SELECT count(*) FROM kb_doc WHERE status='failed'")
+        if owner is None:
+            cur.execute("SELECT count(*) FROM kb_doc WHERE status='failed'")
+        else:
+            cur.execute(f"SELECT count(*) FROM kb_doc WHERE status='failed' AND {vis}", (owner,))
         failed = cur.fetchone()[0]
+        # 任务队列是全局的（一个 worker 服务全库），不按用户切
         cur.execute("SELECT count(*) FROM kb_task WHERE state='pending'")
         pending = cur.fetchone()[0]
-    return {"docs": int(docs), "chunks": int(chunks), "failed": int(failed), "pending": int(pending)}
+        cur.execute("SELECT count(*) FROM kb_doc WHERE status='indexed'")
+        docs_total = cur.fetchone()[0]
+    return {"docs": int(docs), "chunks": int(chunks), "failed": int(failed),
+            "pending": int(pending), "docs_total": int(docs_total)}
 
 
 # ---------------- 迁移 ----------------
