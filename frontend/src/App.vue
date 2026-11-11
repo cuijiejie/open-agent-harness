@@ -592,7 +592,7 @@
                 业务知识
               </button>
               <button type="button" :class="['kb-tab', { on: kbTab === 'docs' }]" @click="openKbDocs">
-                文档资料<span v-if="kbStats.docs" class="kb-tab-badge">{{ kbStats.docs }}</span>
+                文档资料
               </button>
             </div>
 
@@ -1690,21 +1690,12 @@ const kbQuery = ref('')
 const kbResults = ref([])
 const kbSearching = ref(false)
 const kbSearched = ref(false)
-const kbStats = ref({ docs: 0, chunks: 0, failed: 0, pending: 0 })
+
 const kbFileInput = ref(null)
 
 const kbStatusText = (st) => ({
   pending: '排队中', parsing: '解析中', ocr: 'OCR 识别中', embedding: '索引中', indexed: '可用', failed: '失败',
 }[st] || st || '—')
-
-const loadKbStats = async () => {
-  try {
-    const res = await fetch(`${apiBase}/api/kb/stats`)
-    if (!res.ok) return
-    const d = await res.json().catch(() => ({}))
-    if (d.ok) kbStats.value = { docs: d.docs || 0, chunks: d.chunks || 0, failed: d.failed || 0, pending: d.pending || 0 }
-  } catch (e) { /* 知识库未启用时静默 */ }
-}
 
 const loadKbDocs = async () => {
   kbLoading.value = true
@@ -1723,7 +1714,7 @@ const loadKbDocs = async () => {
 const openKbDocs = async () => {
   kbTab.value = 'docs'
   applyKbScopeDefault()
-  await Promise.all([loadKbDocs(), loadKbStats()])
+  await loadKbDocs()
 }
 
 const onKbFilePicked = (e) => {
@@ -1746,7 +1737,7 @@ const uploadKbDoc = async () => {
     kbFile.value = null
     kbFileName.value = ''
     if (kbFileInput.value) kbFileInput.value.value = ''
-    await Promise.all([loadKbDocs(), loadKbStats()])
+    await loadKbDocs()
   } catch (e) {
     showToast('上传失败：' + e.message)
   } finally {
@@ -1789,7 +1780,7 @@ const removeKbDoc = async (d) => {
   const j = await res.json().catch(() => ({}))
   if (!res.ok || j.ok === false) { showToast(j.error || '删除失败'); return }
   showToast('已删除')
-  await Promise.all([loadKbDocs(), loadKbStats()])
+  await loadKbDocs()
 }
 const adminKnowTags = ref('')
 const adminKnowSaving = ref(false)
@@ -2176,7 +2167,7 @@ const openSysTab = async (tab) => {
 // 知识库是一级入口：普通用户也能进（规则与口径看自己的 + 共享；文档资料同理）
 const openKb = async () => {
   openTab('sys-knowledge')
-  await Promise.all([loadAdminKnowledge(), loadKbStats()])
+  await loadAdminKnowledge()
 }
 
 const closeSys = () => { activeTab.value = 'chat' }
@@ -4120,10 +4111,6 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 }
 .kb-tab:hover { color: #4F46E5; background: #eef2ff; }
 .kb-tab.on { color: #fff; background: #4F46E5; }
-.kb-tab-badge {
-  display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 8px;
-  font-size: 11px; background: rgba(255,255,255,.28);
-}
 .kb-file { display: none; }               /* 原生控件藏起来，用下面的按钮代替 */
 .kb-file-btn {
   flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
