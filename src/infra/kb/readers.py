@@ -204,16 +204,15 @@ def _load_raw(path: str) -> tuple[list[Document], int]:
 
         docs = list(PptxReader().load_data(file=p))
         tables = _pptx_tables(path)
-        if tables:
-            merged: list[Document] = []
-            for i, d in enumerate(docs, 1):
-                extra = tables.get(i) or []
-                text = _clean_pptx(d.text or "")
-                if extra:
-                    text = text + "\n" + "\n".join(extra)
-                merged.append(Document(text=text, metadata=dict(d.metadata or {})))
-            docs = merged
-        return docs, len(docs)
+        merged: list[Document] = []
+        for i, d in enumerate(docs, 1):
+            # 清理排版噪声是无条件的：跟这页有没有表格无关
+            text = _clean_pptx(d.text or "")
+            extra = tables.get(i) or []
+            if extra:
+                text = text + "\n" + "\n".join(extra)
+            merged.append(Document(text=text, metadata=dict(d.metadata or {})))
+        return merged, len(merged)
 
     if ext in (".xlsx", ".xlsm"):
         from llama_index.readers.file import PandasExcelReader
