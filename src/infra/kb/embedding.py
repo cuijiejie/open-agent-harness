@@ -1,16 +1,21 @@
-"""嵌入 / 重排客户端：调本地独立进程（127.0.0.1）
+"""嵌入 / 重排：LlamaIndex 的 Embedding 适配器
 
-为什么走 HTTP 而不是在本进程 import fastembed
----------------------------------------------
+后端仍然是本地独立进程（`src/kb_embed_server.py`，127.0.0.1:5110）。
+为什么不在本进程 import 模型
+----------------------------
 uvicorn 是 4 个 worker：每个 worker 加载一份 ONNX 模型 ≈ 300MB，四份就 1.2GB，
-再加上 15G 机器的其它服务会顶到天花板。独立进程 + 本地 HTTP 只占一份。
-（这是设计文档里那条"硬约束"，别改成进程内加载。）
+再加上同机其它服务会顶到内存天花板。独立进程 + 本地 HTTP 只占一份。
+（这是部署文档里那条硬约束，别改成进程内加载。）
+
+LlamaIndex 侧只要求实现 `BaseEmbedding` 的那几个方法，
+换模型时只改服务端，这里不用动。
 """
 from __future__ import annotations
 
 import time
 
 import requests
+from llama_index.core.embeddings import BaseEmbedding
 
 from src.infra.utils.LogUtil import log
 
@@ -69,3 +74,30 @@ def rerank(query: str, docs: list[str], timeout_ms: int = 200) -> list[float] | 
     except Exception as e:
         log.warning(f"重排跳过（降级）: {e}")
         return None
+
+
+class LocalEmbedding(BaseEmbedding):
+    """把本地 HTTP 嵌入服务包装成 LlamaIndex 的 Embedding"""
+
+    batch_size: int = 32
+
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        return embed_texts(texts, batch=self.batch_size)
+
+    def _get_query_embedding(self, query: str) -> list[float]:
+        return self._embed([query])[0]
+
+    def _get_text_embedding(self, text: str) -> list[float]:
+        return self._embed([text])[0]
+
+    def _get_text_embeddings(self, texts: list[str]) -> list[list[float]]:
+        return self._embed(texts)
+
+    async def _aget_query_embedding(self, query: str) -> list[float]:
+        return self._get_query_embedding(query)
+
+    async def _aget_text_embedding(self, text: str) -> list[float]:
+        return self._get_text_embedding(text)
+
+    async def _aget_text_embeddings(self, texts: list[str]) -> list[list[float]]:
+        return self._get_text_embeddings(texts)

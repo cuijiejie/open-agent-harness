@@ -1,4 +1,4 @@
-"""摄取管线：上传 → 任务 → 解析 → 切分 → 嵌入 → 入库
+"""摄取管线：上传 → 任务 → 解析（LlamaIndex readers）→ 切分 → 嵌入 → 向量库
 
 为什么用任务表而不是同步处理
 ----------------------------
@@ -6,7 +6,7 @@
 而且用户上传完就该立刻看到"排队中/索引中"，而不是浏览器转圈。所以：
 
     上传接口只做三件事：校验、落盘、写 kb_task（毫秒级返回）
-    真正的解析/嵌入由 worker 干（夜间 timer 或手动跑）
+    真正的解析/切分/嵌入由 worker 干（上传后立刻踢一脚，见 kick.py）
 
 用法：
     python -m src.infra.kb.ingest --once        # 处理完队列里所有任务
@@ -20,13 +20,12 @@ import os
 import time
 import uuid
 
-from src.infra.kb import chunk as chunk_mod
-from src.infra.kb import embed as embed_cli
-from src.infra.kb import parse as parse_mod
+from src.infra.kb import index as kb_index
+from src.infra.kb import readers
 from src.infra.kb import store
 from src.infra.utils.LogUtil import log
 
-ALLOWED_EXT = {".pdf", ".docx", ".xlsx", ".xlsm", ".pptx", ".txt", ".md", ".csv"}
+ALLOWED_EXT: set[str] = readers.ALLOWED_EXT
 
 
 def _data_dir() -> str:
@@ -79,8 +78,27 @@ def _source_path(doc_id: int) -> str | None:
     return None
 
 
+def _load_with_ocr(path: str, doc: dict) -> tuple[list, int]:
+    """PDF 无文字层时走 OCR；其余格式解析失败直接抛错"""
+    from src.infra.kb import ocr as ocr_mod
+
+    try:
+        return readers.load(path, doc_id=doc["id"], filename=doc["filename"],
+                            scope=doc["scope"], owner=doc["owner"])
+    except readers.NeedOCR as e:
+        if not ocr_mod.enabled():
+            raise RuntimeError(f"该文档是扫描件，OCR 未启用（{e}）") from e
+        store.set_doc_status(doc["id"], "ocr")
+        blocks, total_pages = ocr_mod.ocr_pdf(path, doc["id"])
+        docs = readers.ocr_documents(blocks, doc_id=doc["id"], filename=doc["filename"],
+                                     scope=doc["scope"], owner=doc["owner"])
+        log.warning(f"OCR 识别完成，继续入库: doc={doc['id']} pages={total_pages} "
+                    f"blocks={len(blocks)}")
+        return docs, total_pages or 0
+
+
 def index_doc(doc_id: int) -> dict:
-    """真正干活：解析 → 切分 → 嵌入 → 写库"""
+    """真正干活：解析 → 切分 → 嵌入 → 写向量库（LlamaIndex 负责后三步）"""
     doc = store.get_doc(doc_id)
     if not doc:
         return {"ok": False, "error": f"文档 {doc_id} 不存在"}
@@ -91,58 +109,29 @@ def index_doc(doc_id: int) -> dict:
 
     store.set_doc_status(doc_id, "parsing")
     try:
-        parsed = parse_mod.parse_document(path)
-    except parse_mod.NeedOCR as e:
-        # 扫描件：没有文字层 → 走 OCR（逐页渲染成图交给视觉模型）
-        from src.infra.kb import ocr as ocr_mod
-
-        if not ocr_mod.enabled():
-            store.set_doc_status(doc_id, "failed",
-                                 error=f"需要 OCR，但未启用（[kb] ocr_enabled / ocr_base_url）：{e}")
-            log.warning(f"知识库文档需 OCR 但未启用: doc={doc_id} {e}")
-            return {"ok": False, "error": f"该文档是扫描件，OCR 未启用（{e}）"}
-
-        store.set_doc_status(doc_id, "ocr")
-        try:
-            raw_blocks, total_pages = ocr_mod.ocr_pdf(path, doc_id)
-        except Exception as oe:
-            store.set_doc_status(doc_id, "failed", error=f"OCR 失败：{oe}"[:500])
-            log.error(f"知识库 OCR 失败: doc={doc_id} {oe}", exc_info=True)
-            return {"ok": False, "error": f"OCR 失败：{oe}"}
-        parsed = parse_mod.Parsed(
-            blocks=[parse_mod.Block(**b) for b in raw_blocks], pages=total_pages or 0)
-        log.warning(f"OCR 识别完成，继续入库: doc={doc_id} pages={parsed.pages} "
-                    f"blocks={len(parsed.blocks)}")
+        docs, pages = _load_with_ocr(path, doc)
     except Exception as e:
         store.set_doc_status(doc_id, "failed", error=str(e)[:500])
+        log.error(f"知识库解析失败: doc={doc_id} {e}", exc_info=True)
         return {"ok": False, "error": f"解析失败：{e}"}
-
-    chunks = chunk_mod.split_blocks(parsed.blocks)
-    if not chunks:
-        store.set_doc_status(doc_id, "failed", error="切分后为空")
-        return {"ok": False, "error": "切分后为空"}
 
     store.set_doc_status(doc_id, "embedding")
     try:
-        vectors = embed_cli.embed_texts([c["content"] for c in chunks])
+        kb_index.delete_doc(doc_id)          # 重建索引：先清旧向量，否则会留重复
+        n = kb_index.add_documents(docs)
     except Exception as e:
-        store.set_doc_status(doc_id, "failed", error=f"嵌入失败：{e}")
-        return {"ok": False, "error": f"嵌入失败：{e}"}
+        store.set_doc_status(doc_id, "failed", error=f"写入向量库失败：{e}"[:500])
+        log.error(f"知识库写入失败: doc={doc_id} {e}", exc_info=True)
+        return {"ok": False, "error": f"写入向量库失败：{e}"}
 
-    for c, v in zip(chunks, vectors):
-        c["embedding"] = v
-    try:
-        n = store.save_chunks(doc_id, doc["scope"], doc["owner"], chunks)
-    except Exception as e:
-        # 落库失败（如脏字符 / 维度不符）必须把状态改成 failed，
-        # 否则文档永远停在 embedding，界面上看着像"卡住了"
-        store.set_doc_status(doc_id, "failed", error=f"写库失败：{e}"[:500])
-        log.error(f"知识库落库失败: doc={doc_id} {e}", exc_info=True)
-        return {"ok": False, "error": f"写库失败：{e}"}
-    store.set_doc_status(doc_id, "indexed", chunks=n, pages=parsed.pages, error="")
+    if n == 0:
+        store.set_doc_status(doc_id, "failed", error="切分后为空")
+        return {"ok": False, "error": "切分后为空"}
+
+    store.set_doc_status(doc_id, "indexed", chunks=n, pages=pages, error="")
     log.warning(f"知识库入库完成: doc={doc_id} file={doc['filename']} "
-                f"pages={parsed.pages} chunks={n} rev={doc['sha256'][:8]}")
-    return {"ok": True, "doc_id": doc_id, "chunks": n, "pages": parsed.pages}
+                f"pages={pages} nodes={n} rev={doc['sha256'][:8]}")
+    return {"ok": True, "doc_id": doc_id, "chunks": n, "pages": pages}
 
 
 def run_once() -> int:
@@ -169,7 +158,18 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="知识库索引 worker")
     ap.add_argument("--once", action="store_true", help="处理完队列即退出")
     ap.add_argument("--loop", type=int, default=0, help="常驻：每 N 秒轮询一次")
+    ap.add_argument("--reindex-all", action="store_true",
+                    help="升级/换模型后一次性重建：删旧 kb_chunk 表，把所有文档重新排队")
     args = ap.parse_args()
+
+    if args.reindex_all:
+        store.ensure_schema()
+        store.drop_legacy_chunk_table()
+        n = store.requeue_all()
+        print(f"已删除旧 kb_chunk 表，重新排队 {n} 个文档")
+        done = run_once()
+        print(f"重建完成：{done} 个任务")
+        return 0
 
     if args.once or not args.loop:
         n = run_once()

@@ -116,6 +116,13 @@ class Configs(object):
         self.kbEmbedUrl: str = _get('kb', 'embed_url', 'http://127.0.0.1:5110')
         self.kbDim: int = _get('kb', 'dim', '768', int)
         self.kbRerankTimeoutMs: int = _get('kb', 'rerank_timeout_ms', '200', int)
+        # 向量表（LlamaIndex 自建：<table> 元数据表 + data_<table> 节点表）
+        self.kbTableName: str = _get('kb', 'table_name', 'kb_nodes')
+        # 切分与召回（chunk 长度按字符计，中文友好）
+        self.kbChunkSize: int = _get('kb', 'chunk_size', '700', int)
+        self.kbChunkOverlap: int = _get('kb', 'chunk_overlap', '100', int)
+        self.kbVecTop: int = _get('kb', 'vec_top', '40', int)
+        self.kbFuseTop: int = _get('kb', 'fuse_top', '20', int)
         # 上传与索引
         self.kbMaxFileMb: int = _get('kb', 'max_file_mb', '20', int)
         self.kbDataDir: str = _get('kb', 'data_dir', '')

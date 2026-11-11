@@ -40,7 +40,7 @@ def kb_search(query: str, top_k: int = 5) -> str:
         k = 5
 
     try:
-        from src.infra.kb import search as kb
+        from src.infra.kb import retrieve as kb
         from config.Configs import cfg
 
         if not bool(getattr(cfg, "kbEnabled", True)):

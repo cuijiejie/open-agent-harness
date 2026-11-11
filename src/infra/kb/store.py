@@ -1,22 +1,20 @@
-"""知识库（RAG）存储层：PG + pgvector
+"""知识库的业务状态表：文档登记 + 索引任务队列（PG）
 
-为什么单独一个库
-----------------
-知识库的数据量（chunk + 向量）和业务库（MySQL pa_*）完全不同量级，
-放一起会让备份/迁移变重；PG 本来就在跑 checkpointer，多一个 kb 库成本为零。
+为什么还留两张自己的表
+----------------------
+向量和正文交给 LlamaIndex 的 PGVectorStore 管（data_<table>），
+但「这份文件是谁传的、多大、sha256、现在索引到哪一步、失败原因」不属于向量库的职责，
+也不能塞进 metadata 里（要能按状态轮询、要能算统计）。所以保留两张小表：
 
-表只有三张：
-    kb_doc     文档主表（scope=user/global，sha256 去重）
-    kb_chunk   切分后的片段 + 向量 + jieba 分词串
-    kb_task    异步索引任务（解析/嵌入/重索引，可重试）
+    kb_doc    文档主表（scope=user/global，sha256 去重，status 状态机）
+    kb_task   异步索引任务（解析/嵌入/重索引，可重试，可回收僵尸任务）
 
 权限口径与 pa_knowledge 一致：scope=user 只看本人，global 全员可读。
-检索 SQL 里必须带 scope 条件 —— 不能"先召回再过滤"，否则越权片段会进模型上下文。
+检索时的 scope 条件不在这里，而在 retrieve.scope_filters（下推到向量库/关键词 SQL）。
 """
 from __future__ import annotations
 
-import json
-from typing import Any
+import os
 
 from src.infra.utils.LogUtil import log
 
@@ -37,19 +35,6 @@ _TABLE_DDL: tuple[str, ...] = (
     "  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),"
     "  UNIQUE (scope, owner, sha256)"
     ")",
-    "CREATE TABLE IF NOT EXISTS kb_chunk ("
-    "  id BIGSERIAL PRIMARY KEY,"
-    "  doc_id BIGINT NOT NULL REFERENCES kb_doc(id) ON DELETE CASCADE,"
-    "  scope VARCHAR(16) NOT NULL DEFAULT 'user',"
-    "  owner VARCHAR(64) NOT NULL DEFAULT '',"
-    "  seq INT NOT NULL DEFAULT 0,"
-    "  content TEXT NOT NULL,"
-    "  tokens INT NOT NULL DEFAULT 0,"
-    "  page INT,"
-    "  section VARCHAR(200) NOT NULL DEFAULT '',"
-    "  embedding vector({dim}),"
-    "  tokens_text TEXT NOT NULL DEFAULT ''"
-    ")",
     "CREATE TABLE IF NOT EXISTS kb_task ("
     "  id BIGSERIAL PRIMARY KEY,"
     "  doc_id BIGINT NOT NULL,"
@@ -62,8 +47,7 @@ _TABLE_DDL: tuple[str, ...] = (
 )
 
 _INDEX_DDL: tuple[str, ...] = (
-    "CREATE INDEX IF NOT EXISTS idx_kb_chunk_scope ON kb_chunk (scope, owner)",
-    "CREATE INDEX IF NOT EXISTS idx_kb_chunk_doc ON kb_chunk (doc_id)",
+    "CREATE INDEX IF NOT EXISTS idx_kb_doc_scope ON kb_doc (scope, owner)",
     "CREATE INDEX IF NOT EXISTS idx_kb_task_state ON kb_task (state, updated_at)",
 )
 
@@ -92,9 +76,7 @@ def pool():
 
 
 def ensure_schema() -> bool:
-    """建表 + 扩展 + 向量索引（幂等）"""
-    from config.Configs import cfg
-
+    """建业务表 + 关键词检索用的 pg_trgm，并让 LlamaIndex 建好向量表（幂等）"""
     try:
         with pool().connection() as c:
             c.autocommit = True
@@ -102,14 +84,13 @@ def ensure_schema() -> bool:
                 cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
                 cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
                 for sql in _TABLE_DDL:
-                    cur.execute(sql.format(dim=int(getattr(cfg, "kbDim", 768))))
+                    cur.execute(sql)
                 for sql in _INDEX_DDL:
                     cur.execute(sql)
-                # HNSW 索引：建在向量列上，cosine 距离（bge 系列归一化后等价内积）
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_kb_chunk_vec ON kb_chunk "
-                    "USING hnsw (embedding vector_cosine_ops) WITH (m=16, ef_construction=64)"
-                )
+        # 向量表/扩展/索引由 PGVectorStore 自己维护
+        from src.infra.kb import index as kb_index
+
+        kb_index.vector_store()
         return True
     except Exception as e:
         log.error(f"知识库建表失败: {e}", exc_info=True)
@@ -173,30 +154,31 @@ def set_doc_status(doc_id: int, status: str, chunks: int | None = None,
 
 
 def delete_doc(doc_id: int) -> bool:
+    """删登记 + 删向量 + 删落盘原文件"""
     with pool().connection() as c, c.cursor() as cur:
         cur.execute("DELETE FROM kb_doc WHERE id=%s", (doc_id,))
         ok = cur.rowcount > 0
         c.commit()
+    try:
+        from src.infra.kb import index as kb_index
+
+        kb_index.delete_doc(doc_id)
+    except Exception as e:
+        log.warning(f"删除向量失败（登记已删，向量可能残留）: doc={doc_id} {e}")
+    try:
+        d = _data_dir()
+        for fn in os.listdir(d):
+            if fn.startswith(f"{doc_id}_"):
+                os.remove(os.path.join(d, fn))
+    except Exception:
+        pass
     return ok
 
 
-def save_chunks(doc_id: int, scope: str, owner: str, chunks: list[dict]) -> int:
-    """整篇重建：先删旧 chunk，再批量写入（每块含 content/embedding/tokens_text/service）"""
-    with pool().connection() as c, c.cursor() as cur:
-        cur.execute("DELETE FROM kb_chunk WHERE doc_id=%s", (doc_id,))
-        n = 0
-        for ch in chunks:
-            vec = ch.get("embedding")
-            vec_s = None if vec is None else "[" + ",".join(f"{x:.6f}" for x in vec) + "]"
-            cur.execute(
-                "INSERT INTO kb_chunk (doc_id, scope, owner, seq, content, tokens, page, section, "
-                "embedding, tokens_text) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::vector,%s)",
-                (doc_id, scope, owner, ch.get("seq", n), ch["content"], ch.get("tokens", 0),
-                 ch.get("page"), ch.get("section", ""), vec_s, ch.get("tokens_text", "")),
-            )
-            n += 1
-        c.commit()
-    return n
+def _data_dir() -> str:
+    from config.Configs import cfg
+
+    return str(getattr(cfg, "kbDataDir", "") or os.path.join(os.getcwd(), "data", "kb"))
 
 
 # ---------------- 任务 ----------------
@@ -218,7 +200,7 @@ def next_task() -> dict | None:
 
     除 pending/failed 外，还回收「running 但超过 10 分钟没更新」的任务：
     worker 被 kill（部署重启、OOM、客户端超时打断）后任务会永远停在 running，
-    不回收的话那份文档再也索引不了 —— 第一次跑就踩到了。
+    不回收的话那份文档再也索引不了。
     """
     with pool().connection() as c, c.cursor() as cur:
         cur.execute(
@@ -256,3 +238,30 @@ def stats() -> dict:
         cur.execute("SELECT count(*) FROM kb_task WHERE state='pending'")
         pending = cur.fetchone()[0]
     return {"docs": int(docs), "chunks": int(chunks), "failed": int(failed), "pending": int(pending)}
+
+
+# ---------------- 迁移 ----------------
+
+def requeue_all() -> int:
+    """把所有文档重新排队索引（换切分器 / 换嵌入模型 / 从旧版 RAG 升级后跑一次）"""
+    with pool().connection() as c, c.cursor() as cur:
+        cur.execute("SELECT id FROM kb_doc ORDER BY id")
+        ids = [int(r[0]) for r in cur.fetchall()]
+        for i in ids:
+            cur.execute("UPDATE kb_doc SET status='pending', chunks=0, error='' WHERE id=%s", (i,))
+            cur.execute("INSERT INTO kb_task (doc_id, kind) VALUES (%s,'reindex')", (i,))
+        c.commit()
+    return len(ids)
+
+
+def drop_legacy_chunk_table() -> bool:
+    """删掉旧版自研 RAG 的 kb_chunk（向量已改由 LlamaIndex 的 data_<table> 承载）"""
+    try:
+        with pool().connection() as c:
+            c.autocommit = True
+            with c.cursor() as cur:
+                cur.execute("DROP TABLE IF EXISTS kb_chunk")
+        return True
+    except Exception as e:
+        log.warning(f"删除旧 kb_chunk 表失败: {e}")
+        return False

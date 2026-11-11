@@ -46,7 +46,7 @@ def _enabled() -> bool:
 def kb_stats(username: str = Depends(require_login)):
     if not _enabled():
         return JSONResponse({"ok": False, "error": "知识库未启用"}, status_code=404)
-    from src.infra.kb import embed as embed_cli
+    from src.infra.kb import embedding as embed_cli
     from src.infra.kb import store
 
     try:
@@ -162,7 +162,7 @@ def kb_search(request: Request, username: str = Depends(require_login)):
     """检索测试接口（前端"知识库"页用；Agent 走 kb_search 工具）"""
     if not _enabled():
         return JSONResponse({"ok": False, "error": "知识库未启用"}, status_code=404)
-    from src.infra.kb import search as kb_search_mod
+    from src.infra.kb import retrieve as kb_search_mod
 
     q = str(request.query_params.get("q") or "").strip()
     if not q:
