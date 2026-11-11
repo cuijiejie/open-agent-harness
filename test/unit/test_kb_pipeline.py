@@ -40,6 +40,23 @@ class TestSplitter(unittest.TestCase):
         for n in nodes:
             self.assertLessEqual(len(n.text), cap + 8, "块长度不应超过 chunk_size")
 
+    def test_long_paragraph_is_capped(self):
+        """没有标点的长段落也必须被压到 chunk_size 以内
+
+        真实事故：700 字上限下出过 1138 字的块，超过 bge-m3 的 512 token 输入，
+        尾部被截断（内容丢失），而且单次推理要 9 秒，12 块直接超时。
+        """
+        settings.configure(force=True)
+        from llama_index.core import Document
+
+        text = "这是一段没有标点的长文本" * 200          # 2400 字，句末无标点
+        nodes = settings.split_documents([Document(text=text, id_="9:0")])
+        cap = settings.splitter().chunk_size
+        self.assertGreater(len(nodes), 1)
+        self.assertLessEqual(max(len(n.text) for n in nodes), cap)
+        # 重叠要生效：第二块开头应能在第一块里找到
+        self.assertIn(nodes[1].text[:8], nodes[0].text)
+
     def test_overlap_keeps_context(self):
         settings.configure(force=True)
         text = "".join(f"句子{i}：内容内容内容内容内容。" for i in range(120))
