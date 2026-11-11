@@ -589,7 +589,7 @@
             <!-- 两个子页：规则与口径（pa_knowledge 短事实）/ 文档资料（RAG） -->
             <div class="kb-tabs">
               <button type="button" :class="['kb-tab', { on: kbTab === 'facts' }]" @click="kbTab = 'facts'">
-                规则与口径
+                业务知识
               </button>
               <button type="button" :class="['kb-tab', { on: kbTab === 'docs' }]" @click="openKbDocs">
                 文档资料<span v-if="kbStats.docs" class="kb-tab-badge">{{ kbStats.docs }}</span>
@@ -597,7 +597,10 @@
             </div>
 
             <!-- ===== 规则与口径（原有）===== -->
-            <template v-if="kbTab === 'facts'">            <div class="know-add">
+            <template v-if="kbTab === 'facts'">            <div class="prefs-count kb-know-count">
+              个人 {{ kbKnowMine }}/{{ kbKnowLimit }} 条 · 共享知识由管理员维护
+            </div>
+            <div class="know-add">
               <input v-model="adminKnowInput" class="rbac-input know-input-main" maxlength="100"
                      placeholder="一句话事实，例如：产品 A 属于主推类目"
                      @keyup.enter="addAdminKnowledge" />
@@ -856,13 +859,12 @@
     </div>
 
     <!-- 轨迹（右侧 tab 内容）：每轮一条，展开看工具耗时 -->
-    <!-- 个人设置：偏好 / 业务知识 / 修改密码（和系统设置一样用页面，不弹框） -->
+    <!-- 个人设置：偏好 / 修改密码（业务知识在侧边栏「知识库」里） -->
     <div v-if="activeTab === 'me'" class="tab-pane">
       <div class="me-wrap">
         <div class="prefs-head">
           <div class="prefs-tabs">
             <button type="button" :class="['prefs-tab', { on: meTab === 'prefs' }]" @click="openMeTab('prefs')">偏好</button>
-            <button type="button" :class="['prefs-tab', { on: meTab === 'know' }]" @click="openMeTab('know')">业务知识</button>
             <button type="button" :class="['prefs-tab', { on: meTab === 'pwd' }]" @click="openMeTab('pwd')">修改密码</button>
           </div>
         </div>
@@ -883,33 +885,6 @@
             <button type="button" class="appr-ok" :disabled="!prefInput.trim()" @click="addPref">添加</button>
           </div>
           <div class="prefs-count">已用 {{ prefs.length }}/{{ prefsMax }} 条</div>
-        </template>
-
-        <!-- 业务知识 -->
-        <template v-else-if="meTab === 'know'">
-          <div class="prefs-list">
-            <div v-if="!knowledge.length" class="prefs-empty">还没有记录任何业务知识</div>
-            <div v-for="k in knowledge" :key="k.id" class="prefs-item">
-              <span class="prefs-text">
-                <span class="know-scope" :class="k.scope">{{ k.scope === 'global' ? '共享' : '个人' }}</span>
-                {{ k.content }}
-                <span v-if="k.tags" class="know-tags">{{ k.tags }}</span>
-              </span>
-              <button v-if="k.scope !== 'global' || knowIsAdmin" type="button" class="prefs-del"
-                      @click="delKnowledge(k.id)"
-                      :title="k.scope === 'global' ? '共享知识，只有管理员可删除' : '删除'">删除</button>
-            </div>
-          </div>
-          <div class="prefs-add">
-            <input v-model="knowInput" class="prefs-input" maxlength="100"
-                   placeholder="一句话事实，如：产品 A 属于主推类目" @keyup.enter="addKnowledge" />
-          </div>
-          <div class="prefs-add">
-            <input v-model="knowTags" class="prefs-input" maxlength="100"
-                   placeholder="关键词（逗号分隔），如：M003838,主推,车抵" @keyup.enter="addKnowledge" />
-            <button type="button" class="appr-ok" :disabled="!knowInput.trim()" @click="addKnowledge">添加</button>
-          </div>
-          <div class="prefs-count">个人 {{ knowMine }}/{{ knowMax }} 条 · 共享知识由管理员维护</div>
         </template>
 
         <!-- 修改密码 -->
@@ -1439,14 +1414,13 @@ const userMenuOpen = ref(false)
 const toggleUserMenu = () => { userMenuOpen.value = !userMenuOpen.value }
 const closeUserMenu = () => { userMenuOpen.value = false }
 
-// ===== 个人设置页（偏好 / 业务知识 / 修改密码）=====
+// ===== 个人设置页（偏好 / 修改密码）=====
 const meTab = ref('prefs')
 const mePwd = ref({ old: '', pwd: '', pwd2: '', err: '', busy: false })
 const openMeTab = async (tab = 'prefs') => {
   meTab.value = tab
   openTab('me')
   if (tab === 'prefs') await loadPrefs()
-  if (tab === 'know') await loadKnowledge()
 }
 const submitMePwd = async () => {
   const b = mePwd.value
@@ -1693,6 +1667,8 @@ const fmtTime = (v) => {
   } catch (e) { return String(v).slice(0, 16) }
 }
 const adminKnowledge = ref([])
+const kbKnowMine = ref(0)
+const kbKnowLimit = ref(50)
 const adminKnowInput = ref('')
 
 // ===== 知识库 · 文档资料（RAG）=====
@@ -2132,6 +2108,8 @@ const loadAdminKnowledge = async () => {
     if (!res.ok) { showToast('读取知识库失败', 'err'); return }
     const d = await res.json()
     adminKnowledge.value = d.items || []
+    kbKnowMine.value = d.mine_count || 0
+    kbKnowLimit.value = d.limit || 50
   } catch (e) { showToast('读取知识库失败：' + e.message, 'err') }
 }
 const addAdminKnowledge = async () => {
@@ -3167,49 +3145,6 @@ const showArchived = ref(false)
 const prefs = ref([])
 const prefsMax = ref(10)
 const prefInput = ref('')
-const knowledge = ref([])
-const knowIsAdmin = ref(false)
-const knowInput = ref('')
-const knowTags = ref('')
-const knowMax = ref(50)
-const knowMine = ref(0)
-
-const loadKnowledge = async () => {
-  try {
-    const res = await fetch(`${apiBase}/api/knowledge`)
-    if (!res.ok) { showToast('读取业务知识失败', 'err'); return }
-    const d = await res.json()
-    knowledge.value = d.items || []
-    knowMax.value = d.limit || 50
-    knowMine.value = d.mine_count || 0
-    knowIsAdmin.value = !!d.is_admin
-  } catch (e) { showToast('读取业务知识失败：' + e.message, 'err') }
-}
-const addKnowledge = async () => {
-  const text = knowInput.value.trim()
-  if (!text) return
-  try {
-    const res = await fetch(`${apiBase}/api/knowledge`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: text, tags: knowTags.value.trim() }),
-    })
-    const d = await res.json().catch(() => ({}))
-    if (!res.ok || d.ok === false) { showToast(d.error || '添加失败', 'err'); return }
-    showToast('已添加')
-    knowInput.value = ''; knowTags.value = ''
-    await loadKnowledge()
-  } catch (e) { showToast('添加失败：' + e.message, 'err') }
-}
-const delKnowledge = async (id) => {
-  try {
-    const res = await fetch(`${apiBase}/api/knowledge/${id}`, { method: 'DELETE' })
-    if (!res.ok) { showToast('删除失败', 'err'); return }
-    showToast('已删除')
-    await loadKnowledge()
-  } catch (e) { showToast('删除失败：' + e.message, 'err') }
-}
-
 const loadPrefs = async () => {
   try {
     const res = await fetch(`${apiBase}/api/prefs`)
