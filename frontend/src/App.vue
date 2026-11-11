@@ -635,7 +635,7 @@
               <div class="know-add">
                 <input ref="kbFileInput" type="file" class="kb-file"
                        accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.txt,.md,.csv" @change="onKbFilePicked" />
-                <select v-model="kbScope" class="rbac-input kb-scope">
+                <select v-model="kbScope" class="rbac-input kb-scope" @change="kbScopeTouched = true">
                   <option value="user">个人（仅自己可见）</option>
                   <option v-if="isAdmin" value="global">全局（全员可读，仅管理员可传）</option>
                 </select>
@@ -1494,6 +1494,7 @@ const loadMe = async () => {
     meRoles.value = d.roles || []
     // 管理员判定只依赖这个接口（/api/users 非管理员会 403，不能拿它当探测）
     isAdmin.value = !!d.is_admin
+    applyKbScopeDefault()
     if (isAdmin.value) rbacCanManage.value = true
   } catch (e) { /* 权限接口不可用不影响主流程 */ }
 }
@@ -1679,6 +1680,11 @@ const kbFile = ref(null)
 const kbFileName = ref('')
 const kbUploading = ref(false)
 const kbScope = ref('user')
+// 默认范围随身份走：管理员=全局，普通用户=个人；用户手动改过就不再覆盖
+const kbScopeTouched = ref(false)
+const applyKbScopeDefault = () => {
+  if (!kbScopeTouched.value) kbScope.value = isAdmin.value ? 'global' : 'user'
+}
 const kbQuery = ref('')
 const kbResults = ref([])
 const kbSearching = ref(false)
@@ -1715,6 +1721,7 @@ const loadKbDocs = async () => {
 
 const openKbDocs = async () => {
   kbTab.value = 'docs'
+  applyKbScopeDefault()
   await Promise.all([loadKbDocs(), loadKbStats()])
 }
 
@@ -2120,11 +2127,14 @@ const addAdminKnowledge = async () => {
     const res = await fetch(`${apiBase}/api/knowledge`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, tags: adminKnowTags.value.trim(), scope: 'global' }),
+      body: JSON.stringify({
+        content, tags: adminKnowTags.value.trim(),
+        scope: isAdmin.value ? 'global' : 'user',
+      }),
     })
     const d = await res.json().catch(() => ({}))
     if (!res.ok || d.ok === false) { showToast(d.error || '添加失败', 'err'); return }
-    showToast('已添加共享知识')
+    showToast(isAdmin.value ? '已添加共享知识' : '已添加个人知识')
     adminKnowInput.value = ''; adminKnowTags.value = ''
     await loadAdminKnowledge()
   } catch (e) { showToast('添加失败：' + e.message, 'err') }
