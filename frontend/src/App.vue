@@ -4132,7 +4132,8 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
   transition: border-color .15s, color .15s, background .15s;
 }
 .kb-file-btn:hover { border-color: #8b7cf6; color: #4f46e5; background: #f8f7ff; }
-.kb-scope { flex: 0 0 auto; width: auto; min-width: 84px; }
+/* 提高优先级：.rbac-input 的 flex:1 定义在后面，会把这个下拉拉满整行 */
+.know-add select.kb-scope { flex: 0 0 auto; width: auto; min-width: 84px; }
 .kb-hint { font-size: 12px; color: #94a3b8; }
 
 /* 检索结果 */
