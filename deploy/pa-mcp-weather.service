@@ -1,0 +1,20 @@
+[Unit]
+Description=MCP 天气示例服务（streamable_http，供 open-agent-harness 接入）
+Documentation=https://github.com/cuijiejie/open-agent-harness/blob/main/docs/MCP接入说明.md
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/data1/oah-fastapi
+Environment=PYTHONPATH=/data1/oah-fastapi
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/data1/miniforge3/envs/oah/bin/python -m uvicorn deploy.mcp_weather.server:app --host 127.0.0.1 --port 5120
+Restart=always
+RestartSec=5
+# 只监听回环：外网访问不到，只有本机的 open-agent-harness 能调
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
