@@ -182,7 +182,6 @@ class Configs(object):
 
         # MCP（外部工具生态）：**只能管理员在配置里声明**，用户不可自装
         self.mcpEnabled: bool = _get('mcp', 'enabled', 'false').lower() == 'true'
-        self.mcpServers: str = _get('mcp', 'servers', '')
         self.mcpTimeout: int = _get('mcp', 'timeout', '30', int)
 
         # 本地登录口令（为空=免密）

@@ -417,7 +417,7 @@
             </div>
             </div>
 
-            <!-- ===== MCP 服务（远程 streamable_http 可页面配置；stdio 只能写在配置文件） ===== -->
+            <!-- ===== MCP 服务（streamable_http：管理员填地址即可接入别人的服务） ===== -->
             <div v-show="toolsTab === 'mcp'">
               <div class="rbac-toolbar toolbar-right">
                 <button type="button" class="skill-act" @click="loadMcp">刷新</button>
@@ -458,9 +458,6 @@
                   <button type="button" class="appr-ok" :disabled="mcpSaving" @click="saveMcpServer">{{ mcpSaving ? '保存中…' : '保存' }}</button>
                   <button type="button" class="skill-act" @click="mcpEdit = ''">取消</button>
                 </div>
-                <div class="skill-hint" style="margin-top:8px" v-if="mcpForm.isNew">
-                  stdio（在服务器上起进程）不能从页面新增，要接本地进程请写 <code>configs.cfg</code> 的 <code>[mcp] servers=</code>。
-                </div>
               </div>
               <div v-if="mcpMsg" class="skill-msg">{{ mcpMsg }}</div>
               <div v-if="!mcpEnabled" class="skill-empty">
@@ -483,10 +480,9 @@
                     </span>
                     <span v-if="srv.last_error" class="cell-muted" :title="srv.last_error"> ⚠</span>
                   </div>
-                  <div class="cell-muted" :title="srv.transport === 'stdio' ? ((srv.command || '') + ' ' + ((srv.args || []).join(' '))) : (srv.url || '')">
-                    <span class="mcp-transport-chip">{{ srv.transport === 'stdio' ? 'stdio' : 'streamable_http' }}</span>
-                    <code v-if="srv.transport !== 'stdio'" class="mcp-url">{{ srv.url }}</code>
-                    <code v-else>{{ srv.command }} {{ (srv.args || []).join(' ') }}</code>
+                  <div class="cell-muted" :title="srv.url || ''">
+                    <span class="mcp-transport-chip">streamable_http</span>
+                    <code class="mcp-url">{{ srv.url }}</code>
                   </div>
                   <div class="cell-muted">{{ srv.tool_count || (srv.tools || []).length }} 个</div>
                   <div class="cell-disp" :title="(srv.tools || []).join(', ')">
@@ -501,7 +497,7 @@
                            @change="toggleMcpPublic(srv)" />
                   </div>
                   <div class="rbac-user-actions">
-                    <button type="button" class="link-btn" @click="startEditMcp(srv)">编辑</button><button type="button" class="link-btn" :disabled="userBusy" @click="testMcp(srv.name)">测试</button><button v-if="mcpCanManage && srv.editable" type="button" class="link-btn link-danger" @click="deleteMcp(srv)">删除</button>
+                    <button type="button" class="link-btn" @click="startEditMcp(srv)">编辑</button><button type="button" class="link-btn" :disabled="userBusy" @click="testMcp(srv.name)">测试</button><button v-if="mcpCanManage" type="button" class="link-btn link-danger" @click="deleteMcp(srv)">删除</button>
                   </div>
                 </div>
               </div>
@@ -2499,7 +2495,7 @@ const startEditMcp = (srv) => {
     url: srv.url || '',
     headersText: Object.entries(hdrs).map(([k, v]) => `${k}: ${v}`).join('\n'),
     enabled: srv.enabled !== false,
-    remote: srv.transport !== 'stdio',
+    remote: true,
     tool_names: names,
   }
   mcpEdit.value = srv.name
@@ -5263,7 +5259,7 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 .mcp-row:last-child { border-bottom: none; }
 .mcp-row > div:nth-child(3), .mcp-row > div:nth-child(5) { justify-content: flex-start; text-align: left; }
 .mcp-row code { font-size: 11.5px; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 传输标识：stdio 灰、streamable_http 紫，一眼看出这台是不是页面能改的 */
+/* 传输标识：统一 streamable_http */
 .mcp-transport-chip {
   flex: 0 0 auto; margin-right: 6px; padding: 1px 6px; border-radius: 5px;
   font-size: 10.5px; font-family: ui-monospace, monospace;

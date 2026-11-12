@@ -1,33 +1,28 @@
-"""MCP 客户端（langchain-mcp-adapters）：stdio / streamable_http / sse 三种传输
+"""MCP 客户端（langchain-mcp-adapters）：只走 streamable_http
 
-为什么换成官方适配器
---------------------
-原来是自己手写的 stdio JSON-RPC（行分隔协议）。能用，但只认"本机起进程"这一种传输，
-而现实里对方给的 MCP 服务八成是 HTTP 端点（`POST /mcp` 的 streamable_http，或旧的 SSE）。
-官方的 `langchain_mcp_adapters` 把这几种传输、会话初始化、通知、流式响应都实现了，
-我们只负责：**从库里读配置 → 建连接 → 把工具包装成本项目的命名与权限口径**。
+设计取舍
+--------
+**只支持一种传输：streamable_http**（MCP 2025-03-26 规范里的远程传输）。
+- 不做 stdio：那要在应用机上起进程，等于把"远程执行"开给界面，安全边界守不住，
+  部署时还要管依赖、管进程、管僵尸；远程端点只要一个 URL。
+- 不做 SSE：老传输，新服务基本不用，多一套只会让排障多一个分支。
 
-安全边界（重要，别松）
-----------------------
-- **stdio**：会在应用机上起进程，等于远程执行，所以只能写在 `configs.cfg` 里由运维声明，
-  **页面不提供新增/修改**（接口层硬拒），命令白名单校验在 `server_bean.ALLOWED_COMMANDS`。
-- **streamable_http / sse**：只是由应用主动出网去调别人的服务，不落地执行任何东西，
-  所以允许管理员在页面上自助配置（含鉴权头），但每次都记审计日志。
+所以"接一个 MCP 服务" = 管理员在页面上填 **名称 + 地址（+ 鉴权头）**，
+参数全部在地址的 query 串和请求头里，没有 command / args / env 这些东西。
+服务清单的唯一来源是 `pa_mcp_servers` 表（页面写、这里读）。
 
-配置（configs.cfg，仅 stdio 需要；远程服务走库/页面）
-----------------------------------------------------
-    [mcp]
-    enabled=true
-    servers=[{"name":"local","transport":"stdio","command":"python3","args":["/opt/mcp/server.py"]}]
-    timeout=30
+安全边界
+--------
+远程地址由**管理员**填写，应用会主动出网去请求它（含内网地址）——这等价于
+"管理员可以指定应用访问哪"，所以只有管理员能增删改，且每次写操作都记审计日志。
 
 调用模型
 --------
 `get_tools()` 在后台事件循环里发现工具（只列清单，用完即关）；
-真正调用时适配器为**每次调用新建一个会话**（stdio 起进程 / http 建连接），
-所以工具可以被 uvicorn 主循环里的 agent 直接 await，不存在跨 loop 复用连接的问题。
+真正调用时适配器为**每次调用新建一次会话**（HTTP 连接），
+所以工具可以被 uvicorn 主循环里的 agent 直接 await。
 
-对外命名保持 `mcp_<服务名>_<工具名>`：RBAC、工具管理、角色页都按这个前缀匹配，不能改。
+对外命名 `mcp_<服务名>_<工具名>`：RBAC、工具管理、角色页都按这个前缀匹配，不能改。
 """
 from __future__ import annotations
 
@@ -44,10 +39,8 @@ from src.infra.utils.LogUtil import log
 MAX_SERVERS: int = 20
 MAX_TOOLS_PER_SERVER: int = 30
 MAX_OUTPUT_CHARS: int = 8000
-# 页面可自助配置的远程传输：**只支持 streamable_http**（MCP 2025-03-26 起的标准传输）
-# stdio 只能来自配置文件：它在应用机上起进程，等于远程执行
-REMOTE_TRANSPORTS: tuple = ("streamable_http",)
-ALLOWED_TRANSPORTS: tuple = ("stdio",) + REMOTE_TRANSPORTS
+# 唯一的传输；留成元组是为了界面/接口都从同一处取，避免"两套写法"
+TRANSPORTS: tuple = ("streamable_http",)
 DEFAULT_TRANSPORT: str = "streamable_http"
 # 工具缓存存活时间（秒）：多 worker 下让"页面改完 → 对话生效"有界，见 load_tools 注释
 MCP_CACHE_TTL: float = 30.0
@@ -87,46 +80,7 @@ def _get_bridge() -> _Bridge:
         return _bridge
 
 
-# ---------------------------------------------------------------- 配置读取
-def build_connection(srv: dict, timeout: int = 30) -> dict | None:
-    """把库里/配置里的一行 → 适配器认识的 connection dict
-
-    返回 None 表示这条配置不合法（缺 url / 缺 command / 传输不认识）。
-    """
-    name: str = str(srv.get("name") or "").strip()
-    if not name:
-        return None
-    transport: str = str(srv.get("transport") or "").strip().lower()
-    if not transport:
-        # 老数据没有 transport 列：有 url 就是远程，否则按 stdio
-        transport = "streamable_http" if str(srv.get("url") or "").strip() else "stdio"
-    if transport not in ALLOWED_TRANSPORTS:
-        return None
-
-    if transport == "stdio":
-        command: str = str(srv.get("command") or "").strip()
-        if not command:
-            return None
-        conn: dict = {
-            "transport": "stdio",
-            "command": command,
-            "args": [str(a) for a in (srv.get("args") or [])],
-        }
-        env = srv.get("env")
-        if isinstance(env, dict) and env:
-            conn["env"] = {str(k): str(v) for k, v in env.items()}
-        return conn
-
-    url: str = str(srv.get("url") or "").strip()
-    if not url.lower().startswith(("http://", "https://")):
-        return None
-    headers = srv.get("headers")
-    conn = {"transport": transport, "url": url, "timeout": float(timeout)}
-    if isinstance(headers, dict) and headers:
-        conn["headers"] = {str(k): str(v) for k, v in headers.items()}
-    return conn
-
-
+# ---------------------------------------------------------------- 配置校验
 def normalize_headers(raw: Any) -> dict:
     """请求头：接受 dict 或 'K: V' 逐行的字符串，返回干净 dict"""
     if isinstance(raw, dict):
@@ -142,14 +96,33 @@ def normalize_headers(raw: Any) -> dict:
     return out
 
 
+def build_connection(srv: dict, timeout: int = 30) -> dict | None:
+    """一行服务配置 → 适配器认识的 connection dict；不合法返回 None
+
+    只有 url 一种必填（鉴权走 headers，其它参数放 url 的 query 串）。
+    """
+    name: str = str(srv.get("name") or "").strip()
+    transport: str = str(srv.get("transport") or DEFAULT_TRANSPORT).strip().lower()
+    url: str = str(srv.get("url") or "").strip()
+    if not name or transport not in TRANSPORTS:
+        return None
+    if not url.lower().startswith(("http://", "https://")):
+        return None
+    conn: dict = {"transport": transport, "url": url, "timeout": float(timeout)}
+    headers = normalize_headers(srv.get("headers"))
+    if headers:
+        conn["headers"] = headers
+    return conn
+
+
 def validate_remote(name: str, transport: str, url: str) -> str:
     """页面新增/编辑时的校验；返回空串表示通过"""
     import re as _re
 
     if not _re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,23}", str(name or "")):
         return "服务名只能用小写字母、数字、下划线或短横线（≤24 字符）"
-    if transport not in REMOTE_TRANSPORTS:
-        return "页面只支持 streamable_http（stdio 请写在配置文件里）"
+    if transport not in TRANSPORTS:
+        return "只支持 streamable_http 传输"
     if not str(url or "").lower().startswith(("http://", "https://")):
         return "URL 必须以 http:// 或 https:// 开头"
     return ""
@@ -184,7 +157,7 @@ def _to_text(result: Any) -> str:
 
 
 class McpManager:
-    """按库/配置管理 MCP 服务，并把它们的工具暴露给 agent"""
+    """按库里的服务清单，把别人的 MCP 工具暴露给 agent"""
 
     def __init__(self) -> None:
         self._tools_cache: list[BaseTool] | None = None
@@ -193,57 +166,15 @@ class McpManager:
         self._probe: dict[str, dict] = {}
         self._lock = threading.Lock()
 
-    # ---------- 服务清单 ----------
-    def _servers_from_cfg(self) -> list[dict]:
-        """服务器清单：库为准；配置文件里新增的（库里没有）补进表
-
-        顺序：读库 → 读配置 → 配置里有库里没有的名字就 INSERT IGNORE → 以库为准返回。
-        """
-        db_rows: list[dict] = []
+    # ---------- 服务清单：唯一来源 pa_mcp_servers ----------
+    @staticmethod
+    def _servers() -> list[dict]:
         try:
             from src.agent.mcp.server_bean import mcp_servers
 
-            db_rows = mcp_servers.list_servers()
+            return mcp_servers.list_servers()[:MAX_SERVERS]
         except Exception as e:
-            log.warning(f"读取 pa_mcp_servers 失败（回落配置文件）: {e}")
-
-        cfg_rows: list[dict] = self._servers_from_file()
-        if cfg_rows:
-            try:
-                from src.agent.mcp.server_bean import mcp_servers
-
-                added = mcp_servers.seed(cfg_rows)
-                if added:
-                    log.info(f"配置文件里有 {added} 个新 MCP 服务，已补进 pa_mcp_servers")
-                    db_rows = mcp_servers.list_servers()
-            except Exception as e:
-                log.warning(f"MCP 配置与表同步失败（本轮用配置）: {e}")
-
-        rows = db_rows or cfg_rows
-        return rows[:MAX_SERVERS]
-
-    @staticmethod
-    def _servers_from_file() -> list[dict]:
-        """读 configs.cfg 的 [mcp] servers（JSON 数组）"""
-        try:
-            from config.Configs import cfg
-
-            if not getattr(cfg, "mcpEnabled", False):
-                return []
-            raw: str = str(getattr(cfg, "mcpServers", "") or "").strip()
-            if not raw or raw in ("[]", ""):
-                return []
-            data = json.loads(raw)
-            if not isinstance(data, list):
-                log.warning("MCP servers 配置不是 JSON 数组，忽略")
-                return []
-            out: list[dict] = []
-            for item in data[:MAX_SERVERS]:
-                if isinstance(item, dict) and item.get("name") and build_connection(item):
-                    out.append(item)
-            return out
-        except Exception as e:
-            log.warning(f"解析 MCP 配置失败（忽略）: {e}")
+            log.warning(f"读取 pa_mcp_servers 失败（本轮不挂载 MCP 工具）: {e}")
             return []
 
     @staticmethod
@@ -261,33 +192,30 @@ class McpManager:
         for srv in servers:
             conn = build_connection(srv, timeout=timeout)
             if not conn:
-                log.warning(f"MCP 服务配置不完整，跳过: {srv.get('name')}")
+                log.warning(f"MCP 服务配置不完整（缺 url），跳过: {srv.get('name')}")
                 continue
             out[str(srv["name"])[:24]] = conn
         return out
 
     # ---------- 工具装配 ----------
     def load_tools(self) -> list[BaseTool]:
-        """返回所有 MCP server 的工具（缓存 30 秒；**一台连不上不影响其它台**）
+        """返回所有 MCP 服务的工具（缓存 30 秒；**一台连不上不影响其它台**）
 
         缓存为什么要 TTL：uvicorn 多 worker 各持一份内存缓存，管理页新增/删除服务时
         只能清掉"处理该请求的那个 worker"的缓存。没有 TTL 的话，其它 worker 会一直
         拿着旧清单（表现为"页面显示已接入，但对话里模型说没这个工具"）。30 秒足够短，
-        也避免每次对话都去连一遍远程服务。
+        也避免每轮对话都去连一遍远程服务。
         """
         with self._lock:
             ts: float = time.time()
             if self._tools_cache is not None and (ts - self._cache_ts) < MCP_CACHE_TTL:
                 return self._tools_cache
-            servers = self._servers_from_cfg()
-            conns = self._connections(servers)
+            conns = self._connections(self._servers())
             tools: list[BaseTool] = []
             if not conns:
                 self._tools_cache = []
                 self._cache_ts = ts
                 return []
-            import time as _t
-
             try:
                 from langchain_mcp_adapters.client import MultiServerMCPClient
 
@@ -298,21 +226,20 @@ class McpManager:
                 self._cache_ts = ts
                 return []
             timeout = max(30, self._timeout() + 10)
-            for srv_name, conn in conns.items():
+            for srv_name in conns:
                 try:
                     raw_tools = _get_bridge().run(client.get_tools(server_name=srv_name), timeout=timeout)
                 except Exception as e:
-                    self._probe[srv_name] = {"ok": False, "error": str(e)[:300], "tools": [], "ts": _t.time()}
-                    log.warning(f"MCP 服务连接失败（跳过，不影响其它服务）: {srv_name}"
-                                f"（{conn.get('transport')}），err={str(e)[:200]}")
+                    self._probe[srv_name] = {"ok": False, "error": str(e)[:300], "tools": [], "ts": ts}
+                    log.warning(f"MCP 服务连接失败（跳过，不影响其它服务）: {srv_name}，err={str(e)[:200]}")
                     continue
                 picked = raw_tools[:MAX_TOOLS_PER_SERVER]
                 names: list[str] = []
                 for t in picked:
                     tools.append(self._wrap(t, srv_name))
                     names.append(str(getattr(t, "name", "")))
-                self._probe[srv_name] = {"ok": True, "error": "", "tools": names, "ts": _t.time()}
-                log.info(f"MCP 服务已接入: {srv_name}（{conn.get('transport')}），工具={len(picked)}")
+                self._probe[srv_name] = {"ok": True, "error": "", "tools": names, "ts": ts}
+                log.info(f"MCP 服务已接入: {srv_name}，工具={len(picked)}")
             self._tools_cache = tools
             self._cache_ts = ts
             return tools
@@ -345,16 +272,15 @@ class McpManager:
 
     # ---------- 管理面 ----------
     def describe_servers(self, connect: bool = True) -> list[dict]:
-        """管理面用：列出已配置的 MCP 服务（按需探测，探测结果带工具清单）"""
+        """管理面用：列出已配置的服务（按需探测，探测结果带工具清单）"""
         if connect:
             try:
                 self.load_tools()
             except Exception as e:
                 log.warning(f"MCP 列表前连接失败（继续展示配置）: {e}")
         out: list[dict] = []
-        for srv in self._servers_from_cfg():
+        for srv in self._servers():
             name: str = str(srv.get("name") or "")
-            conn = build_connection(srv, timeout=self._timeout())
             tools: list[str] = [
                 t.name for t in (self._tools_cache or []) if t.name.startswith(f"mcp_{name}_")
             ]
@@ -363,15 +289,12 @@ class McpManager:
                 "name": name,
                 "display_name": str(srv.get("display_name") or ""),
                 "tool_names": srv.get("tool_names") or {},
-                "transport": str(srv.get("transport") or (conn or {}).get("transport") or "stdio"),
+                "transport": str(srv.get("transport") or DEFAULT_TRANSPORT),
                 "url": str(srv.get("url") or ""),
-                "command": str(srv.get("command") or ""),
-                "args": [str(a) for a in (srv.get("args") or [])],
-                "headers": normalize_headers(srv.get("headers")) if srv.get("headers") else {},
+                "headers": normalize_headers(srv.get("headers")),
                 "note": str(srv.get("note") or ""),
                 "enabled": bool(srv.get("enabled", True)),
-                "editable": str(srv.get("transport") or "") in REMOTE_TRANSPORTS,
-                "connected": bool(probe.get("ok")) if probe else bool(conn and tools),
+                "connected": bool(probe.get("ok")) if probe else bool(tools),
                 "last_error": str(probe.get("error") or "")[:300],
                 "tools": tools,
                 "tool_count": len(tools),
@@ -379,22 +302,21 @@ class McpManager:
         return out
 
     def test_server(self, name: str) -> dict:
-        """连一次某个服务并返回工具清单（stdio 起进程、http 建连接）"""
-        import time as _t
-
-        srv = next((s for s in self._servers_from_cfg() if str(s.get("name")) == name), None)
+        """连一次某个服务并返回它的工具清单（排障用）"""
+        srv = next((s for s in self._servers() if str(s.get("name")) == name), None)
         if not srv:
             return {"ok": False, "error": f"未配置的服务: {name}"}
         conn = build_connection(srv, timeout=self._timeout())
         if not conn:
-            return {"ok": False, "error": "服务配置不完整（缺 command 或 url）"}
+            return {"ok": False, "error": "服务配置不完整（缺 url）"}
         try:
             from langchain_mcp_adapters.client import MultiServerMCPClient
 
             client = MultiServerMCPClient({name: conn}, tool_name_prefix=False)
-            tools = _get_bridge().run(client.get_tools(server_name=name), timeout=max(30, self._timeout() + 10))
+            tools = _get_bridge().run(client.get_tools(server_name=name),
+                                      timeout=max(30, self._timeout() + 10))
             names = [str(getattr(t, "name", "")) for t in tools][:MAX_TOOLS_PER_SERVER]
-            self._probe[name] = {"ok": True, "error": "", "tools": names, "ts": _t.time()}
+            self._probe[name] = {"ok": True, "error": "", "tools": names, "ts": time.time()}
             self._tools_cache = None      # 下次装配重新生成
             self._cache_ts = 0.0
             try:
@@ -404,15 +326,15 @@ class McpManager:
             except Exception:
                 pass
             return {"ok": True, "name": name, "transport": conn.get("transport"),
-                    "tools": [{"name": n, "description": ""} for n in names]}
+                    "tools": [{"name": n} for n in names]}
         except Exception as e:
-            self._probe[name] = {"ok": False, "error": str(e)[:300], "tools": [], "ts": _t.time()}
+            self._probe[name] = {"ok": False, "error": str(e)[:300], "tools": [], "ts": time.time()}
             return {"ok": False, "error": str(e)[:300]}
 
     def reload(self) -> dict:
-        """清空工具缓存与探测结果（配置改动后 / 服务升级后调用）"""
+        """清空工具缓存与探测结果（配置改动后调用）"""
         self.close_all()
-        return {"ok": True, "servers": len(self._servers_from_cfg())}
+        return {"ok": True, "servers": len(self._servers())}
 
     def close_all(self) -> None:
         self._tools_cache = None
@@ -424,5 +346,5 @@ mcp_manager = McpManager()
 
 __all__ = [
     "mcp_manager", "McpManager", "build_connection", "normalize_headers",
-    "validate_remote", "REMOTE_TRANSPORTS", "ALLOWED_TRANSPORTS",
+    "validate_remote", "TRANSPORTS", "DEFAULT_TRANSPORT", "MCP_CACHE_TTL",
 ]

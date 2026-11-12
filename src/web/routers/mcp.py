@@ -2,11 +2,8 @@
 # -*- coding: utf-8 -*-
 """MCP 服务管理接口（查看对所有登录用户开放；增删改/重连/公共开关仅管理员）
 
-安全边界（务必保持）：
-- **远程服务（streamable_http / sse）**：应用主动出网去调别人的 MCP，不落地执行任何程序，
-  所以允许管理员在页面上自助配置（含鉴权头），每次写操作都记审计日志。
-- **stdio 服务**：由应用机起进程 = 远程执行，只能写在 `configs.cfg` 的 `[mcp] servers=`，
-  页面接口一律拒绝新增/修改/删除（返回 400 并说明原因）。
+只支持 streamable_http：应用主动出网去调别人的 MCP，不在本机执行任何程序。
+管理员在页面上填 名称 + 地址（+ 鉴权头）即可接入，每次写操作都记审计日志。
 """
 from __future__ import annotations
 
@@ -263,9 +260,9 @@ def _after_change() -> None:
 
 @router.post("/api/mcp/servers")
 def create_server(payload: dict | None = Body(None), username: str = Depends(require_login)):
-    """新增**远程** MCP 服务（streamable_http / sse）——仅管理员
+    """新增 MCP 服务（streamable_http）——仅管理员
 
-    stdio 一律拒绝：那是"在服务器上起程序"，不能从页面开这个口子。
+    只接受 URL：没有 command/args/env，避免把"在服务器上起进程"开给界面。
     """
     if not _is_admin(username):
         return JSONResponse({"ok": False, "error": "仅管理员可新增 MCP 服务"}, status_code=403)
@@ -284,7 +281,7 @@ def create_server(payload: dict | None = Body(None), username: str = Depends(req
     try:
         from src.agent.mcp.server_bean import mcp_servers
 
-        res = mcp_servers.create_remote(
+        res = mcp_servers.create_server(
             name, transport, url,
             headers=normalize_headers(body.get("headers")),
             display_name=str(body.get("display_name") or "")[:64],
@@ -293,7 +290,7 @@ def create_server(payload: dict | None = Body(None), username: str = Depends(req
         )
         if res.get("ok"):
             _after_change()
-        log.warning(f"MCP 远程服务新增: user={username}, name={name}, transport={transport}, ok={res.get('ok')}")
+        log.warning(f"MCP 服务新增: user={username}, name={name}, ok={res.get('ok')}")
         return JSONResponse(res, status_code=200 if res.get("ok") else 400)
     except Exception as e:
         log.error(f"新增 MCP 服务异常: {name}, err={e}", exc_info=True)
@@ -303,22 +300,22 @@ def create_server(payload: dict | None = Body(None), username: str = Depends(req
 @router.put("/api/mcp/servers/{name}")
 def update_server(name: str, payload: dict | None = Body(None),
                   username: str = Depends(require_login)):
-    """修改**远程** MCP 服务（URL / 鉴权头 / 显示名 / 说明 / 启用）——仅管理员"""
+    """修改 MCP 服务（URL / 鉴权头 / 显示名 / 说明 / 启用）——仅管理员"""
     if not _is_admin(username):
         return JSONResponse({"ok": False, "error": "仅管理员可修改 MCP 服务"}, status_code=403)
     body: dict = payload or {}
-    from src.agent.mcp.client import REMOTE_TRANSPORTS, normalize_headers
+    from src.agent.mcp.client import TRANSPORTS, normalize_headers
 
     transport = body.get("transport")
     url = body.get("url")
-    if transport is not None and str(transport).strip().lower() not in REMOTE_TRANSPORTS:
-        return JSONResponse({"ok": False, "error": "传输方式只支持 streamable_http 或 sse"}, status_code=400)
+    if transport is not None and str(transport).strip().lower() not in TRANSPORTS:
+        return JSONResponse({"ok": False, "error": "只支持 streamable_http 传输"}, status_code=400)
     if url is not None and not str(url).strip().lower().startswith(("http://", "https://")):
         return JSONResponse({"ok": False, "error": "URL 必须以 http:// 或 https:// 开头"}, status_code=400)
     try:
         from src.agent.mcp.server_bean import mcp_servers
 
-        res = mcp_servers.update_remote(
+        res = mcp_servers.update_server(
             name,
             transport=str(transport).strip().lower() if transport is not None else None,
             url=str(url).strip() if url is not None else None,
@@ -330,7 +327,7 @@ def update_server(name: str, payload: dict | None = Body(None),
         )
         if res.get("ok"):
             _after_change()
-        log.warning(f"MCP 远程服务修改: user={username}, name={name}, ok={res.get('ok')}")
+        log.warning(f"MCP 服务修改: user={username}, name={name}, ok={res.get('ok')}")
         return JSONResponse(res, status_code=200 if res.get("ok") else 400)
     except Exception as e:
         log.error(f"修改 MCP 服务异常: {name}, err={e}", exc_info=True)
@@ -339,16 +336,16 @@ def update_server(name: str, payload: dict | None = Body(None),
 
 @router.delete("/api/mcp/servers/{name}")
 def delete_server(name: str, username: str = Depends(require_login)):
-    """删除**远程** MCP 服务（stdio 服务由配置文件维护，不允许删除）——仅管理员"""
+    """删除 MCP 服务——仅管理员"""
     if not _is_admin(username):
         return JSONResponse({"ok": False, "error": "仅管理员可删除 MCP 服务"}, status_code=403)
     try:
         from src.agent.mcp.server_bean import mcp_servers
 
-        res = mcp_servers.delete_remote(name, actor=username)
+        res = mcp_servers.delete_server(name, actor=username)
         if res.get("ok"):
             _after_change()
-        log.warning(f"MCP 远程服务删除: user={username}, name={name}, ok={res.get('ok')}")
+        log.warning(f"MCP 服务删除: user={username}, name={name}, ok={res.get('ok')}")
         return JSONResponse(res, status_code=200 if res.get("ok") else 400)
     except Exception as e:
         log.error(f"删除 MCP 服务异常: {name}, err={e}", exc_info=True)

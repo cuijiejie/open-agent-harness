@@ -2,15 +2,11 @@
 
 MCP（Model Context Protocol）是"把别人的工具接进 agent"的标准协议。接进来之后，对方的工具会自动出现在模型工具清单里（名字前缀 `mcp_<服务名>_`），不用改代码、不用发版。
 
-本项目用 [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters) 做客户端，支持两种传输：
+本项目用 [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters) 做客户端，**只支持一种传输：`streamable_http`**（MCP 2025-03-26 规范里的远程传输）。
 
-| 传输 | 谁维护 | 适用 | 安全边界 |
-|---|---|---|---|
-| **streamable_http** | **管理员在页面上自助配置** | 别人的 MCP 服务（公司网关、SaaS、公开服务） | 应用主动出网，不在本机执行任何程序 |
-| **stdio** | 只能写配置文件（运维） | 用本机进程实现的 MCP server | 会在应用机上起进程＝远程执行，因此不开放给页面 |
-
-> 本项目**只支持 streamable_http 这一种远程传输**。老的 SSE 传输（`GET /sse` + `POST /messages`）不支持——
-> 现在新出的 MCP 服务基本都是 streamable_http，留两套只会让排障多一个分支。
+> 为什么不做 stdio：stdio 要在应用机上起进程，等于把"远程执行"开给界面，安全边界守不住；
+> 也不做老的 SSE 传输（`GET /sse` + `POST /messages`）——新服务基本不用，多一套只会多一个排障分支。
+> 所以本项目里"接一个 MCP 服务"就是**一个 URL**。
 
 ---
 
@@ -57,24 +53,7 @@ MCP（Model Context Protocol）是"把别人的工具接进 agent"的标准协�
 
 ---
 
-## 二、接入本机进程（stdio，配置文件）
-
-`config/configs.cfg`：
-
-```ini
-[mcp]
-enabled = true
-timeout = 30
-servers = [{"name":"local","transport":"stdio","command":"python3","args":["/opt/mcp/server.py"],"env":{"K":"V"}}]
-```
-
-- `command` 走白名单：`python3 / python / docker / node / npx / uvx / uv`
-- 配置文件里新增的服务会在下次启动时**补进** `pa_mcp_servers` 表（同名不覆盖）
-- stdio 服务在页面上是只读的：可以改中文名、测连接、设公共，但**不能改命令、不能删除**
-
----
-
-## 三、排障
+## 二、排障
 
 | 现象 | 先看什么 |
 |---|---|
@@ -89,9 +68,9 @@ servers = [{"name":"local","transport":"stdio","command":"python3","args":["/opt
 
 ---
 
-## 四、安全约束（别改）
+## 三、安全约束（别改）
 
-1. **stdio 只能来自配置文件**：页面接口对 `transport=stdio` 一律 400，防止把"任意命令执行"开给界面用户。
+1. **只有 streamable_http**：接口对其它传输一律 400——不接受任何"在服务器上执行程序"的配置。
 2. **只有管理员能增删改**：所有写接口都过 `_is_admin`，并写 `log.warning` 审计（谁、什么服务、什么动作）。
 3. **输出截断**：单次工具回传超过 8000 字符会截断，避免把上下文撑爆。
 4. **数量上限**：最多 20 个服务、每个服务最多 30 个工具。
@@ -100,13 +79,15 @@ servers = [{"name":"local","transport":"stdio","command":"python3","args":["/opt
 
 ---
 
-## 五、代码位置
+## 四、代码位置
 
 | 文件 | 作用 |
 |---|---|
 | `src/agent/mcp/client.py` | 适配器封装：`build_connection`、工具包装、探测、缓存 |
-| `src/agent/mcp/server_bean.py` | `pa_mcp_servers` 表结构与 CRUD（`create_remote` / `update_remote` / `delete_remote`） |
+| `src/agent/mcp/server_bean.py` | `pa_mcp_servers` 表结构与 CRUD（`create_server` / `update_server` / `delete_server`） |
 | `src/web/routers/mcp.py` | 接口：列表、新增、修改、删除、测试、重载、公共开关 |
 | `frontend/src/App.vue` | 「MCP 服务」页（新增/编辑面板、传输徽标、公共开关） |
 | `test/unit/test_mcp_client.py` | 连接构建、请求头解析、返回值规整的纯函数测试 |
-| `test/integration/demo_mcp_stdio.py` | 本地 stdio 假服务，用于验证链路 |
+
+表结构（`pa_mcp_servers`）：`name` / `transport` / `url` / `headers` / `display_name` / `tool_names` / `note` / `enabled` / `sort_no` / `updated_by` / `updated_at`。
+**没有** `command` / `args` / `env`（stdio 已下线，老库启动时会自动删掉这三列）。

@@ -5,9 +5,9 @@
 | 位置 | 放什么 | 判断标准 | 例子 |
 |---|---|---|---|
 | `src/agent/tools/` | 功能性内置工具 | 换项目还用得上 | `ask_user`、`sandbox_shell`、记忆读写 |
-| `src/agent/mcp/` | MCP 客户端框架 | 换项目还用得上 | stdio 客户端、工具登记 |
+| `src/agent/mcp/` | MCP 客户端框架 | 换项目还用得上 | streamable_http 客户端、工具登记 |
 | **`src/plugins/tools/`** | **你自己的业务工具** | 只服务你的业务系统 | `demo/`（示例） |
-| **`src/plugins/mcp/`** | **你自己的 MCP 服务** | 只服务你的业务系统 | 自行放一份 stdio server |
+| **`src/plugins/mcp/`** | **你自己的 MCP 服务** | 只服务你的业务系统 | 自行部署一个 streamable_http 端点，再在页面接入 |
 
 ## 加一个业务工具（不用改内核）
 

@@ -1,21 +1,16 @@
-"""MCP 服务清单（pa_mcp_servers）：与工具元数据同构，**库为准、配置只做首次种子**
+"""MCP 服务清单（pa_mcp_servers）：**唯一来源是这张表，页面写、客户端读**
 
-为什么要这张表
+为什么只有远程
 --------------
-`pa_tools` 已经在库里维护工具的展示/开关，而 MCP 服务器清单还只在 `configs.cfg` 的
-`[mcp] servers` 里。两者不对称：一个改配置要重启，另一个点页面就生效。
-
-现在把服务器清单也收进库：
-    首次启动 → 表为空 → 把 cfg 里的 servers 灌进表（一次性种子）
-    之后     → 一切以表为准，改表即改清单
-              （本期页面仍是只读，只展示 + 测连接；写入能力预留但不暴露接口）
+MCP 只支持 streamable_http：一条记录 = 名字 + 地址（+ 鉴权头）。
+不存 command / args / env —— 那套是"在应用机上起进程"的 stdio，等于远程执行，
+不能开放给界面，本项目也不做（部署与运维成本都更高，见 docs/MCP接入说明.md）。
 
 安全
 ----
-表里存的是**可执行命令**，所以：
-    · 只有管理员的手工操作能改（本期不开放页面写接口）
-    · `enabled=0` 的服务不会启动
-    · 命令白名单集中在 ALLOWED_COMMANDS，写入时校验（未来开放接口时直接复用）
+    · 只有管理员能写（接口层校验 + 审计日志）
+    · `enabled=0` 的服务不参与工具装配
+    · 地址只允许 http(s)，由管理员填写（信任边界=管理员）
 """
 from __future__ import annotations
 
@@ -23,18 +18,12 @@ import json
 
 from src.infra.utils.LogUtil import log
 
-# 允许的启动命令（防止被塞任意可执行文件）
-ALLOWED_COMMANDS: tuple = ("python3", "python", "docker", "node", "npx", "uvx", "uv")
-
 _DDL = """
 CREATE TABLE IF NOT EXISTS pa_mcp_servers (
   name       VARCHAR(32)  NOT NULL PRIMARY KEY,
-  transport  VARCHAR(16)  NOT NULL DEFAULT 'stdio',
-  command    VARCHAR(256) NOT NULL DEFAULT '',
+  transport  VARCHAR(16)  NOT NULL DEFAULT 'streamable_http',
   url        VARCHAR(512) NOT NULL DEFAULT '',
   headers    JSON,
-  args       JSON,
-  env        JSON,
   display_name VARCHAR(64)  NOT NULL DEFAULT '',
   tool_names JSON,
   note       VARCHAR(255) NOT NULL DEFAULT '',
@@ -45,15 +34,17 @@ CREATE TABLE IF NOT EXISTS pa_mcp_servers (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """
 
-# 老库补列（幂等）
+# 老库迁移（幂等）：补远程字段；把 stdio 时代的 command/args/env 删掉
 _ALTERS = (
     "ALTER TABLE pa_mcp_servers ADD COLUMN display_name VARCHAR(64) NOT NULL DEFAULT ''",
     "ALTER TABLE pa_mcp_servers ADD COLUMN tool_names JSON NULL",
-    "ALTER TABLE pa_mcp_servers ADD COLUMN transport VARCHAR(16) NOT NULL DEFAULT 'stdio'",
+    "ALTER TABLE pa_mcp_servers ADD COLUMN transport VARCHAR(16) NOT NULL DEFAULT 'streamable_http'",
     "ALTER TABLE pa_mcp_servers ADD COLUMN url VARCHAR(512) NOT NULL DEFAULT ''",
     "ALTER TABLE pa_mcp_servers ADD COLUMN headers JSON NULL",
-    # 远程服务没有 command，老表这一列是 NOT NULL 无默认值 → 放宽
-    "ALTER TABLE pa_mcp_servers MODIFY COLUMN command VARCHAR(256) NOT NULL DEFAULT ''",
+    # stdio 已下线：这三列不再使用（表里本来也只有远程服务）
+    "ALTER TABLE pa_mcp_servers DROP COLUMN command",
+    "ALTER TABLE pa_mcp_servers DROP COLUMN args",
+    "ALTER TABLE pa_mcp_servers DROP COLUMN env",
 )
 
 
@@ -91,49 +82,40 @@ class McpServerService:
 
     # ---------- 读 ----------
     def list_servers(self, include_disabled: bool = False) -> list[dict]:
-        """[{name, transport, command, url, headers, args, env, note, enabled}]；读失败返回空（调用方回落 cfg）"""
+        """[{name, transport, url, headers, display_name, tool_names, note, enabled}]"""
         if not self.ensure_schema():
             return []
         try:
             with self._conn() as c, c.cursor() as cur:
-                sql = ("SELECT name, command, args, env, note, enabled, display_name, tool_names, "
-                       "transport, url, headers FROM pa_mcp_servers "
+                sql = ("SELECT name, transport, url, headers, display_name, tool_names, note, enabled "
+                       "FROM pa_mcp_servers "
                        + ("" if include_disabled else "WHERE enabled=1 ")
                        + "ORDER BY sort_no, name")
                 cur.execute(sql)
                 rows = cur.fetchall()
         except Exception as e:
-            log.warning(f"读取 pa_mcp_servers 失败（回落配置文件）: {e}")
+            log.warning(f"读取 pa_mcp_servers 失败: {e}")
             return []
 
         out: list[dict] = []
         for r in rows:
             try:
-                args = json.loads(r[2]) if r[2] else []
+                headers = json.loads(r[3]) if r[3] else {}
             except Exception:
-                args = []
+                headers = {}
             try:
-                env = json.loads(r[3]) if r[3] else None
-            except Exception:
-                env = None
-            try:
-                tnames = json.loads(r[7]) if r[7] else {}
+                tnames = json.loads(r[5]) if r[5] else {}
             except Exception:
                 tnames = {}
-            try:
-                headers = json.loads(r[10]) if r[10] else None
-            except Exception:
-                headers = None
             out.append({
-                "name": str(r[0]), "command": str(r[1] or ""),
-                "args": [str(a) for a in (args or [])],
-                "env": env if isinstance(env, dict) else None,
-                "note": str(r[4] or ""), "enabled": bool(r[5]),
-                "display_name": str(r[6] or ""),
+                "name": str(r[0]),
+                "transport": str(r[1] or "streamable_http"),
+                "url": str(r[2] or ""),
+                "headers": headers if isinstance(headers, dict) else {},
+                "display_name": str(r[4] or ""),
                 "tool_names": tnames if isinstance(tnames, dict) else {},
-                "transport": str(r[8] or "stdio"),
-                "url": str(r[9] or ""),
-                "headers": headers if isinstance(headers, dict) else None,
+                "note": str(r[6] or ""),
+                "enabled": bool(r[7]),
             })
         return out
 
@@ -165,31 +147,30 @@ class McpServerService:
             log.error(f"更新 MCP 元数据失败: {srv}, err={e}")
             return {"ok": False, "error": "更新失败（详见服务端日志）"}
 
-    # ---------- 页面自助管理（**仅远程传输**；stdio 起进程＝远程执行，只能改配置） ----------
-    def create_remote(self, name: str, transport: str, url: str, headers: dict | None = None,
+    # ---------- 页面自助管理（只有远程：名字 + 地址 + 鉴权头） ----------
+    def create_server(self, name: str, transport: str, url: str, headers: dict | None = None,
                       display_name: str = "", note: str = "", actor: str = "") -> dict:
         if not self.ensure_schema():
             return {"ok": False, "error": "数据库不可用"}
         try:
             with self._conn() as c, c.cursor() as cur:
-                cur.execute("SELECT transport FROM pa_mcp_servers WHERE name=%s", (name,))
-                row = cur.fetchone()
-                if row:
+                cur.execute("SELECT 1 FROM pa_mcp_servers WHERE name=%s", (name,))
+                if cur.fetchone():
                     return {"ok": False, "error": f"服务名 {name} 已存在"}
                 cur.execute(
-                    "INSERT INTO pa_mcp_servers (name, transport, command, url, headers, args, env, "
-                    "display_name, note, enabled, updated_by) VALUES (%s,%s,'',%s,%s,'[]','{}',%s,%s,1,%s)",
+                    "INSERT INTO pa_mcp_servers (name, transport, url, headers, display_name, note, enabled, updated_by) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,1,%s)",
                     (name, transport, url,
                      json.dumps(headers or {}, ensure_ascii=False),
                      display_name[:64], note[:255], actor[:64]),
                 )
-            log.warning(f"MCP 远程服务已新增: name={name}, transport={transport}, url={url}, actor={actor}")
+            log.warning(f"MCP 服务已新增: name={name}, url={url}, actor={actor}")
             return {"ok": True, "name": name}
         except Exception as e:
-            log.error(f"新增 MCP 远程服务失败: {name}, err={e}")
+            log.error(f"新增 MCP 服务失败: {name}, err={e}")
             return {"ok": False, "error": "新增失败（详见服务端日志）"}
 
-    def update_remote(self, name: str, transport: str | None = None, url: str | None = None,
+    def update_server(self, name: str, transport: str | None = None, url: str | None = None,
                       headers: dict | None = None, display_name: str | None = None,
                       note: str | None = None, enabled: bool | None = None,
                       actor: str = "") -> dict:
@@ -214,69 +195,31 @@ class McpServerService:
         sets.append("updated_by=%s"); args.append(actor[:64])
         try:
             with self._conn() as c, c.cursor() as cur:
-                cur.execute("SELECT transport FROM pa_mcp_servers WHERE name=%s", (name,))
-                row = cur.fetchone()
-                if not row:
+                cur.execute("SELECT 1 FROM pa_mcp_servers WHERE name=%s", (name,))
+                if not cur.fetchone():
                     return {"ok": False, "error": f"MCP 服务 {name} 不在表里"}
-                if str(row[0]) == "stdio":
-                    return {"ok": False, "error": "stdio 服务由配置文件维护，页面不可改"}
                 cur.execute(f"UPDATE pa_mcp_servers SET {', '.join(sets)} WHERE name=%s", (*args, name))
-            log.warning(f"MCP 远程服务已修改: name={name}, fields={[x.split('=')[0] for x in sets]}, actor={actor}")
+            log.warning(f"MCP 服务已修改: name={name}, fields={[x.split('=')[0] for x in sets]}, actor={actor}")
             return {"ok": True, "name": name}
         except Exception as e:
-            log.error(f"修改 MCP 远程服务失败: {name}, err={e}")
+            log.error(f"修改 MCP 服务失败: {name}, err={e}")
             return {"ok": False, "error": "修改失败（详见服务端日志）"}
 
-    def delete_remote(self, name: str, actor: str = "") -> dict:
+    def delete_server(self, name: str, actor: str = "") -> dict:
         if not self.ensure_schema():
             return {"ok": False, "error": "数据库不可用"}
         try:
             with self._conn() as c, c.cursor() as cur:
-                cur.execute("SELECT transport FROM pa_mcp_servers WHERE name=%s", (name,))
-                row = cur.fetchone()
-                if not row:
+                cur.execute("SELECT 1 FROM pa_mcp_servers WHERE name=%s", (name,))
+                if not cur.fetchone():
                     return {"ok": False, "error": f"MCP 服务 {name} 不在表里"}
-                if str(row[0]) == "stdio":
-                    return {"ok": False, "error": "stdio 服务由配置文件维护，不能在这里删除"}
                 cur.execute("DELETE FROM pa_mcp_servers WHERE name=%s", (name,))
-            log.warning(f"MCP 远程服务已删除: name={name}, actor={actor}")
+            log.warning(f"MCP 服务已删除: name={name}, actor={actor}")
             return {"ok": True, "name": name}
         except Exception as e:
-            log.error(f"删除 MCP 远程服务失败: {name}, err={e}")
+            log.error(f"删除 MCP 服务失败: {name}, err={e}")
             return {"ok": False, "error": "删除失败（详见服务端日志）"}
-
-    # ---------- 首次种子：从配置文件迁移 ----------
-    def seed(self, cfg_servers: list[dict]) -> int:
-        """把配置文件里的服务器补进表（幂等：已有同名就跳过）"""
-        if not cfg_servers or not self.ensure_schema():
-            return 0
-        n: int = 0
-        try:
-            with self._conn() as c, c.cursor() as cur:
-                for s in cfg_servers:
-                    name: str = str(s.get("name") or "").strip()[:32]
-                    transport: str = str(s.get("transport") or "").strip() or (
-                        "streamable_http" if s.get("url") else "stdio")
-                    command: str = str(s.get("command") or "").strip()
-                    url: str = str(s.get("url") or "").strip()
-                    if not name or not (command or url):
-                        continue
-                    cur.execute(
-                        "INSERT IGNORE INTO pa_mcp_servers (name, transport, command, url, headers, args, env, note, updated_by) "
-                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                        (name, transport, command, url,
-                         json.dumps(s.get("headers") or {}, ensure_ascii=False),
-                         json.dumps([str(a) for a in (s.get("args") or [])], ensure_ascii=False),
-                         json.dumps(s.get("env") or {}, ensure_ascii=False),
-                         "由 configs.cfg 首次迁移", "system"),
-                    )
-                    n += cur.rowcount
-            if n:
-                log.info(f"pa_mcp_servers 首次迁移完成: {n} 个服务（来源 configs.cfg）")
-        except Exception as e:
-            log.warning(f"pa_mcp_servers 迁移失败: {e}")
-        return n
 
 
 mcp_servers = McpServerService()
-__all__ = ["mcp_servers", "McpServerService", "ALLOWED_COMMANDS"]
+__all__ = ["mcp_servers", "McpServerService"]
