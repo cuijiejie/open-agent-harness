@@ -60,7 +60,7 @@ async def lifespan(_app: FastAPI):
     if not _sb.enabled:
         raise RuntimeError(
             f"OpenShell 沙箱不可用：找不到可执行文件 {_sb.bin!r}。"
-            "本系统要求沙箱必须可用（安装见 docs/运维与排查.md「沙箱」）"
+            "本系统要求沙箱必须可用（安装见 docs/部署说明.md「沙箱」）"
         )
     log.info(f"沙箱就绪: bin={_sb.bin}, image={_sb.image or '(OpenShell 默认镜像)'}")
 

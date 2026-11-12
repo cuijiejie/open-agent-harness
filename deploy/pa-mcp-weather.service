@@ -1,6 +1,6 @@
 [Unit]
 Description=MCP 天气示例服务（streamable_http；代码在 test/mcp_weather，线上当接入示例跑）
-Documentation=https://github.com/cuijiejie/open-agent-harness/blob/main/docs/MCP接入说明.md
+Documentation=https://github.com/cuijiejie/open-agent-harness/blob/main/docs/部署说明.md
 After=network.target
 
 [Service]

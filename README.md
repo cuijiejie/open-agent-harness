@@ -93,15 +93,12 @@ uvicorn src.app_fastapi:app --host 0.0.0.0 --port 5001 --workers 4   # http://lo
 
 首次登录先建管理员：`PYTHONPATH=. "$HOME/miniforge3/envs/oah/bin/python" deploy/seed_admin.py --password '你的密码'`（旧版的免密直登 `/test-login` 已删除）。
 
-**三步部署**（装环境 → 建库初始化 → 登录）见 [`docs/部署说明.md`](docs/部署说明.md)；
-MCP 怎么接、鉴权头怎么填、连不上怎么查见 [`docs/MCP接入说明.md`](docs/MCP接入说明.md)；
-日常运维、可选组件（沙箱 / MCP / Redis）、升级、排障见 [`docs/运维与排查.md`](docs/运维与排查.md)。
+**部署**（环境、依赖、建库、嵌入服务、MCP 接入、验收、排障全在里面）见
+[`docs/部署说明.md`](docs/部署说明.md)；
+Python 环境细节见 [`docs/Conda环境.md`](docs/Conda环境.md)；
+文档知识库（RAG + 扫描件 OCR）见 [`docs/知识库部署说明.md`](docs/知识库部署说明.md)。
 
-**架构与设计**（分层、对话链路、工具装配、沙箱、数据模型、降级矩阵）见
-[`docs/架构说明.md`](docs/架构说明.md)；
-
-文档知识库（RAG + 扫描件 OCR）见 [`docs/知识库部署说明.md`](docs/知识库部署说明.md)；
-偏好 / 业务知识 / 文档资料三层怎么分工见 [`docs/知识分层说明.md`](docs/知识分层说明.md)。
+> 架构设计、分层口径、运维细则、MCP 实现细节属于内部文档，不随这个仓库发布。
 
 ## 目录结构
 

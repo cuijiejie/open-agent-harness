@@ -68,3 +68,10 @@ docs/测试与压测报告-2026-11-06.md
 
 # 知识库上传的原始文件（运行时数据，不入库）
 data/
+
+# 内部文档：只在本地/内网维护，不发布到 GitHub（截图与部署文档仍发布）
+docs/架构说明.md
+docs/知识分层说明.md
+docs/运维与排查.md
+docs/MCP接入说明.md
+docs/迁移说明-Flask到FastAPI.md
