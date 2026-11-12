@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -48,6 +49,8 @@ MAX_OUTPUT_CHARS: int = 8000
 REMOTE_TRANSPORTS: tuple = ("streamable_http",)
 ALLOWED_TRANSPORTS: tuple = ("stdio",) + REMOTE_TRANSPORTS
 DEFAULT_TRANSPORT: str = "streamable_http"
+# 工具缓存存活时间（秒）：多 worker 下让"页面改完 → 对话生效"有界，见 load_tools 注释
+MCP_CACHE_TTL: float = 30.0
 
 
 # ---------------------------------------------------------------- 后台事件循环
@@ -185,6 +188,7 @@ class McpManager:
 
     def __init__(self) -> None:
         self._tools_cache: list[BaseTool] | None = None
+        self._cache_ts: float = 0.0
         # 探测结果：name → {"ok": bool, "error": str, "tools": [..], "ts": float}
         self._probe: dict[str, dict] = {}
         self._lock = threading.Lock()
@@ -264,15 +268,23 @@ class McpManager:
 
     # ---------- 工具装配 ----------
     def load_tools(self) -> list[BaseTool]:
-        """返回所有 MCP server 的工具（结果缓存；**一台连不上不影响其它台**）"""
+        """返回所有 MCP server 的工具（缓存 30 秒；**一台连不上不影响其它台**）
+
+        缓存为什么要 TTL：uvicorn 多 worker 各持一份内存缓存，管理页新增/删除服务时
+        只能清掉"处理该请求的那个 worker"的缓存。没有 TTL 的话，其它 worker 会一直
+        拿着旧清单（表现为"页面显示已接入，但对话里模型说没这个工具"）。30 秒足够短，
+        也避免每次对话都去连一遍远程服务。
+        """
         with self._lock:
-            if self._tools_cache is not None:
+            ts: float = time.time()
+            if self._tools_cache is not None and (ts - self._cache_ts) < MCP_CACHE_TTL:
                 return self._tools_cache
             servers = self._servers_from_cfg()
             conns = self._connections(servers)
             tools: list[BaseTool] = []
             if not conns:
                 self._tools_cache = []
+                self._cache_ts = ts
                 return []
             import time as _t
 
@@ -283,6 +295,7 @@ class McpManager:
             except Exception as e:
                 log.warning(f"MCP 适配器不可用（本轮不挂载 MCP 工具）: {e}")
                 self._tools_cache = []
+                self._cache_ts = ts
                 return []
             timeout = max(30, self._timeout() + 10)
             for srv_name, conn in conns.items():
@@ -301,6 +314,7 @@ class McpManager:
                 self._probe[srv_name] = {"ok": True, "error": "", "tools": names, "ts": _t.time()}
                 log.info(f"MCP 服务已接入: {srv_name}（{conn.get('transport')}），工具={len(picked)}")
             self._tools_cache = tools
+            self._cache_ts = ts
             return tools
 
     @staticmethod
@@ -382,6 +396,7 @@ class McpManager:
             names = [str(getattr(t, "name", "")) for t in tools][:MAX_TOOLS_PER_SERVER]
             self._probe[name] = {"ok": True, "error": "", "tools": names, "ts": _t.time()}
             self._tools_cache = None      # 下次装配重新生成
+            self._cache_ts = 0.0
             try:
                 from src.infra.utils import CacheUtil
 
@@ -401,6 +416,7 @@ class McpManager:
 
     def close_all(self) -> None:
         self._tools_cache = None
+        self._cache_ts = 0.0
         self._probe.clear()
 
 
