@@ -100,7 +100,9 @@ def get_weather(city: str) -> str:
     }, timeout=15)
     r.raise_for_status()
     cur = (r.json() or {}).get("current") or {}
-    desc = WMO_ZH.get(int(cur.get("weather_code") or -1), f"未知({cur.get('weather_code')})")
+    # 注意：weather_code=0 是"晴"，不能被 `or` 当假值吃掉（曾把成都报成"未知(0)"）
+    code = cur.get("weather_code")
+    desc = WMO_ZH.get(int(code), f"未知({code})") if code is not None else "未知"
     label = f"{place.get('name')}（{place.get('admin1') or place.get('country') or ''}）"
     return (
         f"{label} 当前天气：{desc}\n"
