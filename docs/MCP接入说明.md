@@ -97,28 +97,23 @@ MCP（Model Context Protocol）是"把别人的工具接进 agent"的标准协�
 ## 五、把自己的服务包成 MCP
 
 不是所有能力都能在网上找到现成的 MCP 端点。自己包一层很小：官方 `mcp` SDK 的 **FastMCP**
-负责协议（会话 / SSE / 单端点），我们只写工具；工具可以直接用 **LangChain 的 `@tool`** 定义，
-再用 `to_fastmcp` 转过去。
+负责协议（会话 / SSE / 单端点），我们只写工具——**直接用 `@mcp.tool()`，不用中间再转一道**。
 
 ```python
-from langchain_core.tools import tool
-from langchain_mcp_adapters.tools import to_fastmcp
 from mcp.server.fastmcp import FastMCP
 
-@tool
+mcp = FastMCP("mcp-weather", stateless_http=True, json_response=True)
+
+@mcp.tool()
 def get_weather(city: str) -> str:
-    """查询城市当前天气"""
+    """查询城市当前天气"""        # docstring → 工具说明，类型注解 → inputSchema
     ...
 
-mcp = FastMCP("mcp-weather", stateless_http=True, json_response=True)
-t = to_fastmcp(get_weather)
-try:
-    mcp.add_tool(t)                      # 新版 mcp 支持直接加 Tool
-except Exception:
-    mcp._tool_manager._tools[t.name] = t  # 1.30 只收函数，Tool 直接入 manager
-
-app = mcp.streamable_http_app()          # 单端点 /mcp，自带会话与 SSE
+app = mcp.streamable_http_app()    # 单端点 /mcp，自带会话与 SSE
 ```
+
+> LangChain 在这里是**客户端**（`langchain-mcp-adapters` 把 MCP 工具接到 agent 上）。
+> 只有当你要复用某个**已存在的 LangChain 工具实现**时，才需要 `to_fastmcp(tool)` 转换。
 
 完整可运行示例：`test/mcp_weather/`（数据源 Open-Meteo，免费无 key），
 其中 `MCP_WEATHER_STUB=1` 时不联网、返回固定值，供 `check.py` 离线自检。

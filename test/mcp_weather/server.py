@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""MCP 天气示例服务：FastMCP（streamable_http）+ LangChain 工具定义
+"""MCP 天气示例服务：FastMCP（streamable_http）
 
 为什么在 test/ 下
 -----------------
@@ -16,16 +16,14 @@
     · 会话（`Mcp-Session-Id`）与无状态两种模式（这里 stateless_http=True）
     · SSE 与 JSON 两种响应（这里 json_response=True：工具一问一答够用）
 
-和 LangChain 的关系（容易被误解）
----------------------------------
-`langchain-mcp-adapters` 是**客户端**（把 MCP 工具给 LangGraph 用）；
-服务端它只提供一个桥 `to_fastmcp(langchain_tool)` → FastMCP 的 `Tool`。
-所以"用 LangChain 写 MCP 服务端"就是三步：
+为什么不用 LangChain 工具转一手
+--------------------------------
+服务端只做一件事：把函数暴露成 MCP 工具。FastMCP 的 `@mcp.tool()` 就是这个
+（docstring = 工具说明，类型注解 = inputSchema）。再转一手（LangChain `@tool` →
+`to_fastmcp` → 塞进 tool manager）只是多一层没有收益的间接。
 
-    @tool（LangChain 定义）→ to_fastmcp（转 Tool）→ FastMCP 承载
-
-注意 `mcp` 1.30 的 `FastMCP.add_tool()` 只收普通函数，而 `to_fastmcp` 产出的是
-`Tool` 对象（闭包签名是 `**arguments`，用函数注册会丢 schema），所以这里做一行兜底。
+LangChain 在本项目里的位置是**客户端**：`langchain-mcp-adapters` 负责把 MCP 工具接到 agent 上。
+只有想复用某个**已存在的 LangChain 工具实现**时，才需要 `to_fastmcp` 那个桥。
 
 数据源：Open-Meteo（免费、无需 key）
     https://geocoding-api.open-meteo.com/v1/search   地名 → 经纬度
@@ -44,8 +42,6 @@ import logging
 import os
 
 import httpx
-from langchain_core.tools import tool
-from langchain_mcp_adapters.tools import to_fastmcp
 from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -71,6 +67,9 @@ WMO_ZH: dict[int, str] = {
     95: "雷阵雨", 96: "雷阵雨伴冰雹", 99: "强雷暴伴冰雹",
 }
 
+# stateless_http：每次请求独立，不需要会话；json_response：回 application/json
+mcp = FastMCP("mcp-weather", stateless_http=True, json_response=True)
+
 
 def _geocode(city: str) -> dict:
     r = httpx.get(GEOCODE_URL,
@@ -83,9 +82,8 @@ def _geocode(city: str) -> dict:
     return hits[0]
 
 
-# 工具用 LangChain 的 @tool 定义：docstring 就是给模型看的说明，
-# 参数类型 → inputSchema，和我们 agent 侧的工具口径完全一致。
-@tool
+# FastMCP 原生工具：docstring 就是给模型看的说明，参数类型 → inputSchema
+@mcp.tool()
 def get_weather(city: str) -> str:
     """查询某个城市当前的天气：气温、体感温度、湿度、风速、天气状况。城市名中英文都行。"""
     if STUB:
@@ -112,22 +110,12 @@ def get_weather(city: str) -> str:
     )
 
 
-mcp = FastMCP("mcp-weather", stateless_http=True, json_response=True)
-
-_fastmcp_tool = to_fastmcp(get_weather)
-try:
-    mcp.add_tool(_fastmcp_tool)                     # 新版本 mcp 可能直接支持 Tool 对象
-except Exception:                                   # 1.30 只收函数 → 直接放进 tool manager
-    mcp._tool_manager._tools[_fastmcp_tool.name] = _fastmcp_tool
-log.info("MCP 工具已注册: %s（stub=%s）", _fastmcp_tool.name, STUB)
-
-
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request) -> JSONResponse:
     try:
         names = [t.name for t in mcp._tool_manager.list_tools()]
     except Exception:
-        names = [_fastmcp_tool.name]
+        names = ["get_weather"]
     return JSONResponse({"ok": True, "service": "mcp-weather", "transport": "streamable_http",
                          "stub": STUB, "tools": names})
 

@@ -1,4 +1,4 @@
-# MCP 天气示例（FastMCP + LangChain）
+# MCP 天气示例（FastMCP）
 
 一台 streamable_http MCP 服务，既做**客户端测试夹具**，也是线上 `pa-mcp-weather` 的实际代码。
 
@@ -6,24 +6,23 @@
 
 | 文件 | 作用 |
 |---|---|
-| `server.py` | 服务本体：LangChain `@tool` 定义工具 → `to_fastmcp` 转换 → `FastMCP` 承载 |
+| `server.py` | 服务本体：`FastMCP` + `@mcp.tool()`，docstring = 工具说明，类型注解 = inputSchema |
 | `check.py` | 离线自检：拉起 stub 服务 → `McpManager` 发现工具 → 调用 → 断言命名与结果，再验"一台坏服务不影响好服务" |
 
 ## 为什么这样写（关键）
 
 ```
-@tool（LangChain 定义工具） → to_fastmcp()（转成 FastMCP 的 Tool） → FastMCP（streamable_http 服务端）
+@mcp.tool()（FastMCP 原生）  →  FastMCP 承载 streamable_http  →  app = mcp.streamable_http_app()
 ```
 
-- **LangChain 只做客户端**：`langchain-mcp-adapters` 是把 MCP 工具给 agent 用的；服务端它只提供
-  `to_fastmcp(tool)` 这一个桥，没有独立的 "LangChain MCP server"。
-- **协议由官方 `mcp` SDK 的 `FastMCP` 负责**：会话、SSE、`/mcp` 单端点、协议版本协商都现成，
-  不用手写 JSON-RPC（手写只能覆盖 `tools/*`，会话与流式都得自己补）。
-- **两个开关**：`stateless_http=True`（每次请求独立，不需要会话头）、`json_response=True`
+- **服务端只做一件事**：把函数暴露成 MCP 工具。FastMCP 的 `@mcp.tool()` 就是这个，
+  docstring 自动成为工具说明，类型注解自动成为 `inputSchema`。
+- **不需要 LangChain 转一手**：`@tool` → `to_fastmcp` → 塞进 tool manager 只是多一层间接。
+  LangChain 在本项目里的位置是**客户端**（`langchain-mcp-adapters`）；
+  只有要复用某个**已存在的 LangChain 工具实现**时，才用 `to_fastmcp` 那个桥。
+- **协议全部由 `mcp` 官方 SDK 负责**：`/mcp` 单端点、会话、SSE、协议版本协商都现成。
+- **两个开关**：`stateless_http=True`（每次请求独立，不要会话头）、`json_response=True`
   （回 `application/json`，工具一问一答不需要 SSE）。
-- **一个坑**：`mcp` 1.30 的 `FastMCP.add_tool()` 只接受普通函数，而 `to_fastmcp` 产出的是 `Tool`
-  对象（闭包签名是 `**arguments`，按函数注册会丢参数 schema）。所以 `server.py` 里先试
-  `add_tool(tool)`，失败就把 `Tool` 直接放进 tool manager。
 
 ## 跑自检（不联网、不连库）
 
@@ -61,8 +60,8 @@ MCP_WEATHER_STUB=1 PYTHONPATH=. <env>/bin/python -m uvicorn test.mcp_weather.ser
 | 方法 | 由谁处理 |
 |---|---|
 | `initialize` / `notifications/initialized` | FastMCP（协议版本协商、能力声明） |
-| `tools/list` | FastMCP，从 `to_fastmcp` 转来的 Tool 生成 `inputSchema` |
-| `tools/call` | FastMCP 调用 LangChain 工具函数，结果转 `content: [{type: "text"}]` |
+| `tools/list` | FastMCP，从 `@mcp.tool()` 的 docstring 与类型注解生成 `inputSchema` |
+| `tools/call` | FastMCP 调用工具函数，结果转 `content: [{type: "text"}]` |
 | `GET /mcp` | FastMCP 的 SSE 推送流（本服务用不上，但已实现） |
 | `DELETE /mcp` | FastMCP 结束会话 |
 | `GET /health` | 本文件用 `@mcp.custom_route` 加的自定义路由 |
