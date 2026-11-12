@@ -2486,7 +2486,10 @@ const startNewMcp = () => {
 }
 const startEditMcp = (srv) => {
   const names = {}
-  for (const t of (srv.tools || [])) names[t] = (srv.tool_display || {})[t] || (srv.tool_names || {})[t] || ''
+  for (const t of (srv.tools || [])) {
+    const v = (srv.tool_display || {})[t] || (srv.tool_names || {})[t] || ''
+    names[t] = v === t ? '' : v          // 和原名一样等于没起名，显示占位提示更清楚
+  }
   const hdrs = srv.headers || {}
   mcpForm.value = {
     isNew: false,
@@ -5266,7 +5269,10 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
   background: #eef2ff; color: #4338CA; border: 1px solid #dbe1fb;
 }
 .mcp-url { flex: 1 1 auto; min-width: 0; }
-.mcp-headers-input { height: 68px; padding: 7px 8px; resize: vertical; line-height: 1.5; font-family: ui-monospace, monospace; font-size: 12px; }
+.mcp-headers-input { height: 84px; padding: 8px 10px; resize: vertical; line-height: 1.6; font-family: ui-monospace, monospace; font-size: 12.5px; }
+.mcp-edit-row-top { align-items: flex-start; }
+.mcp-edit-row-top > span { padding-top: 6px; }
+.mcp-field-note { margin-top: 4px; font-size: 11.5px; color: #94a3b8; font-weight: 400; line-height: 1.5; }
 .mcp-enable { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: #475569; }
 .link-danger { color: #b91c1c; }
 .link-danger:hover { color: #dc2626; }
