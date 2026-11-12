@@ -3492,10 +3492,13 @@ const deleteSession = async (sid) => {
   } catch (e) { console.error('删除会话失败:', e) }
   if (sid === sessionId.value) {
     chatSubTab.value = 'chat'
-  sessionId.value = generateSessionId()
+    sessionId.value = generateSessionId()
     messagesBySession.value[sessionId.value] = []
     inputText.value = ''
     selectedFiles.value = []
+    // 必须同步到 URL：否则刷新页面时仍拿"已删除的会话号"去恢复，
+    // 表现为侧栏有会话、聊天区空白（历史"消失"）
+    persistSessionId(sessionId.value)
   }
 }
 
@@ -3508,6 +3511,7 @@ const createNewSession = () => {
   // selectedFile 是只读 computed（selectedFiles[0]），给它赋值无效 → 必须清数组，
   // 否则上一个会话选的附件会跟着发到新会话里
   selectedFiles.value = []
+  persistSessionId(sessionId.value)   // 同上：新会话号要立刻写回 URL
 }
 
 const autoResize = () => {
@@ -3605,7 +3609,7 @@ onMounted(async () => {
   // 预热沙箱：登录接口已经预热过一次，但登录会话活得久，第二天直接打开页面
   // 不会重走登录；这里补一刀，让容器在用户看界面时就起来（接口立即返回，不阻塞）
   fetch(`${apiBase}/api/warm`, { method: 'GET' }).catch(() => {})
-  loadSessions()
+  await loadSessions()
   // 先问"我是不是管理员"（/api/rbac/me 所有人可读），**只有管理员**才去拉
   // /api/users（那个接口非管理员必 403：以前每次打开页面都白打一次、还刷一条红字）
   await loadMe()
@@ -3613,6 +3617,13 @@ onMounted(async () => {
   // 若 URL 带 session_id（或 embed 配置），刷新后恢复该会话的消息和选项
   if (config.sessionId) {
     await switchSession(config.sessionId)
+    // 这个 id 可能已被删除（或不属于当前用户）：列表里查不到就换成新会话号，
+    // 否则会停在"侧栏没有这一条、聊天区空白"的状态
+    if (!sessions.value.some((x) => x.session_id === config.sessionId)) {
+      sessionId.value = generateSessionId()
+      messagesBySession.value[sessionId.value] = []
+      persistSessionId(sessionId.value)
+    }
   }
 })
 
