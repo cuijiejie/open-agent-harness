@@ -91,3 +91,34 @@ MCP（Model Context Protocol）是"把别人的工具接进 agent"的标准协�
 
 表结构（`pa_mcp_servers`）：`name` / `transport` / `url` / `headers` / `display_name` / `tool_names` / `note` / `enabled` / `sort_no` / `updated_by` / `updated_at`。
 **没有** `command` / `args` / `env`（stdio 已下线，老库启动时会自动删掉这三列）。
+
+---
+
+## 五、把自己的服务包成 MCP（最简写法）
+
+不是所有能力都能在网上找到现成的 MCP 端点。自己包一层很小：一个 HTTP 服务 + 三个 JSON-RPC 方法。
+
+仓库里带了可运行的示例：`deploy/mcp_weather/`（查天气，数据源 Open-Meteo，免费无 key）。
+
+```
+POST /mcp   处理 initialize / tools/list / tools/call
+GET  /health
+```
+
+关键点：
+
+- `initialize` 回 `{"protocolVersion": 客户端版本, "capabilities": {"tools": {}}, "serverInfo": {...}}`；
+- `tools/list` 回 `{"tools": [{name, description, inputSchema}]}`，**参数说明写在 inputSchema 里**，模型据此填参；
+- `tools/call` 回 `{"content": [{"type": "text", "text": "..."}], "isError": false}`；
+- 通知（没有 `id` 的消息）回 202 即可；
+- 直接返回 `application/json` 就行，不必实现 SSE 流式。
+
+部署到服务器（已内置 unit：`deploy/pa-mcp-weather.service`，监听 `127.0.0.1:5120`）：
+
+```bash
+cp deploy/pa-mcp-weather.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now pa-mcp-weather
+curl -s http://127.0.0.1:5120/health
+```
+
+然后在页面「新增服务」填 `http://127.0.0.1:5120/mcp`，点测试能看到 `get_weather`。
