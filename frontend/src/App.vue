@@ -4301,7 +4301,7 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 .know-add { display: flex; gap: 10px; align-items: center; padding: 0 18px 14px; }
 /* 上传行居中：选择文件 / 范围 / 上传 / 刷新 一排摆中间，提示放下一行 */
 .know-add-center { justify-content: center; }
-.know-hint-line { text-align: center; padding: 0 18px 12px; }
+.kb-hint-line { text-align: center; padding: 0 18px 12px; }
 .kb-polling { color: #6366F1; margin-left: 4px; }
 /* ===== 知识库子页签 ===== */
 .kb-tabs { display: flex; gap: 6px; padding: 0 18px 12px; }
