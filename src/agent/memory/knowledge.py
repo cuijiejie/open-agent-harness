@@ -151,6 +151,39 @@ def get_by_id(kid: int) -> dict | None:
         return None
 
 
+def update(kid: int, content: str | None = None, tags: str | None = None) -> dict:
+    """改一条知识的**内容 / 关键词**（只改传进来的字段）
+
+    归属与权限由调用方（HTTP 接口 / 工具）先校验——这里只管数据合法性与落库。
+    """
+    sets: list[str] = []
+    args: list = []
+    if content is not None:
+        content = (content or "").strip()
+        if not content:
+            return {"ok": False, "error": "内容不能为空"}
+        if len(content) > MAX_CONTENT:
+            return {"ok": False, "error": f"内容太长（{len(content)} > {MAX_CONTENT} 字），请精简"}
+        sets.append("content=%s")
+        args.append(content)
+    if tags is not None:
+        sets.append("tags=%s")
+        args.append((tags or "").strip()[:200])
+    if not sets:
+        return {"ok": False, "error": "没有要修改的字段"}
+    conn = _conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE pa_knowledge SET {', '.join(sets)} WHERE id=%s", (*args, int(kid)))
+        conn.commit()
+        return {"ok": True, "id": int(kid)}
+    except Exception as e:
+        log.warning(f"更新知识失败: id={kid}, err={e}")
+        return {"ok": False, "error": "更新失败"}
+    finally:
+        conn.close()
+
+
 def delete(content: str or int, username: str = "", allow_global: bool = False) -> dict:
     """删除知识
 
@@ -256,4 +289,4 @@ def render_hint(username: str, user_message: str) -> str:
             "与实时查询冲突时以工具查询结果为准）\n" + "\n".join(lines))
 
 
-__all__ = ["add", "delete", "list_items", "recall", "render_hint", "MAX_ITEMS_PER_USER"]
+__all__ = ["add", "update", "delete", "list_items", "recall", "render_hint", "MAX_ITEMS_PER_USER"]

@@ -80,6 +80,36 @@ def add_knowledge(payload: dict | None = Body(None), username: str = Depends(req
         return JSONResponse({"error": "新增知识失败"}, status_code=500)
 
 
+@router.put("/api/knowledge/{kid}")
+def update_knowledge(kid: int, payload: dict | None = Body(None),
+                     username: str = Depends(require_login)):
+    """改一条知识的内容/关键词（个人只能改自己的，共享只有管理员能改）"""
+    try:
+        from src.agent.memory import knowledge as K
+
+        row = K.get_by_id(kid)
+        if not row:
+            return JSONResponse({"error": "知识不存在或无权操作"}, status_code=404)
+        if row["scope"] == "global" and not _is_admin(username):
+            return JSONResponse({"error": "只有管理员可以修改共享知识"}, status_code=403)
+        if row["scope"] == "user" and row.get("username") != username:
+            return JSONResponse({"error": "知识不存在或无权操作"}, status_code=404)
+
+        data = payload or {}
+        res = K.update(kid,
+                       content=data.get("content") if "content" in data else None,
+                       tags=data.get("tags") if "tags" in data else None)
+        if not res.get("ok"):
+            return JSONResponse({"error": res.get("error") or "修改失败"}, status_code=400)
+        log.warning(f"知识已修改: id={kid}, by={username}, scope={row['scope']}")
+        return JSONResponse({"ok": True, "item": {"id": kid,
+                                                  "content": data.get("content", row.get("content")),
+                                                  "tags": data.get("tags", row.get("tags"))}})
+    except Exception as e:
+        log.error(f"修改知识失败: {e}", exc_info=True)
+        return JSONResponse({"error": "修改知识失败"}, status_code=500)
+
+
 @router.delete("/api/knowledge/{kid}")
 def delete_knowledge(kid: int, username: str = Depends(require_login)):
     try:

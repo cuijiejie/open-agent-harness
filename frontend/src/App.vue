@@ -642,11 +642,30 @@
                 <div v-for="k in adminKnowledge" :key="k.id" class="know-row">
                   <div class="cell-muted">{{ k.id }}</div>
                   <div><span class="know-scope" :class="k.scope">{{ k.scope === 'global' ? '共享' : '个人' }}</span></div>
-                  <div class="cell-know">{{ k.content }}</div>
-                  <div class="cell-muted know-tags-cell">{{ k.tags || '—' }}</div>
+                  <template v-if="knowEditing === k.id">
+                    <div class="know-edit-cell">
+                      <input v-model="knowEditContent" class="rbac-input" maxlength="500" placeholder="一句话事实" />
+                    </div>
+                    <div class="know-edit-cell">
+                      <input v-model="knowEditTags" class="rbac-input" maxlength="200" placeholder="关键词，逗号分隔" />
+                    </div>
+                  </template>
+                  <template v-else>
+                    <div class="cell-know">{{ k.content }}</div>
+                    <div class="cell-muted know-tags-cell">{{ k.tags || '—' }}</div>
+                  </template>
                   <div class="cell-disp">{{ k.created_by || k.username || '—' }}</div>
                   <div class="cell-muted">{{ fmtTime(k.created_at) }}</div>
-                  <div><a class="op-link" @click="delAdminKnowledge(k.id)">删除</a></div>
+                  <div class="know-ops">
+                    <template v-if="knowEditing === k.id">
+                      <a class="op-link" @click="saveKnowledgeEdit(k.id)">{{ knowEditSaving ? '保存中…' : '保存' }}</a>
+                      <a class="op-link op-muted" @click="cancelKnowledgeEdit">取消</a>
+                    </template>
+                    <template v-else>
+                      <a class="op-link" @click="startKnowledgeEdit(k)">编辑</a>
+                      <a class="op-link" @click="delAdminKnowledge(k.id)">删除</a>
+                    </template>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2153,6 +2172,41 @@ const addAdminKnowledge = async () => {
     await loadAdminKnowledge()
   } catch (e) { showToast('添加失败：' + e.message, 'err') }
   finally { adminKnowSaving.value = false }
+}
+const knowEditing = ref(null)
+const knowEditContent = ref('')
+const knowEditTags = ref('')
+const knowEditSaving = ref(false)
+const startKnowledgeEdit = (k) => {
+  knowEditing.value = k.id
+  knowEditContent.value = k.content || ''
+  knowEditTags.value = k.tags || ''
+}
+const cancelKnowledgeEdit = () => {
+  knowEditing.value = null
+  knowEditContent.value = ''
+  knowEditTags.value = ''
+}
+const saveKnowledgeEdit = async (id) => {
+  const content = knowEditContent.value.trim()
+  if (!content) { showToast('内容不能为空', 'err'); return }
+  knowEditSaving.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/knowledge/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, tags: knowEditTags.value.trim() }),
+    })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok || d.ok === false) { showToast(d.error || '修改失败', 'err'); return }
+    showToast('已保存')
+    cancelKnowledgeEdit()
+    await loadAdminKnowledge()
+  } catch (e) {
+    showToast('修改失败：' + e.message, 'err')
+  } finally {
+    knowEditSaving.value = false
+  }
 }
 const delAdminKnowledge = async (id) => {
   if (!confirm('确定删除这条知识？')) return
@@ -4249,8 +4303,12 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 .know-input-main { flex: 1; }
 .know-input-tags { width: 260px; }
 .pane-sub { font-size: 12.5px; color: #94a3b8; margin-left: 10px; font-weight: 400; }
+.know-edit-cell { padding: 4px 8px !important; }
+.know-edit-cell .rbac-input { height: 30px; font-size: 12.5px; }
+.know-ops { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.op-muted { color: #94a3b8; }
 .know-thead, .know-row {
-  display: grid; grid-template-columns: 56px 72px minmax(260px, 1fr) 200px 110px 140px 64px;
+  display: grid; grid-template-columns: 56px 72px minmax(260px, 1fr) 200px 110px 140px 112px;
   align-items: stretch;
 }
 .know-thead {
