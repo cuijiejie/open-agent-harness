@@ -98,8 +98,8 @@ MCP（Model Context Protocol）是"把别人的工具接进 agent"的标准协�
 
 不是所有能力都能在网上找到现成的 MCP 端点。自己包一层很小：一个 HTTP 服务 + 三个 JSON-RPC 方法。
 
-仓库里带了可运行的示例：`test/integration/mcp_weather_server.py`（查天气，数据源 Open-Meteo，免费无 key；
-`MCP_WEATHER_STUB=1` 时不联网返回固定值，供 `test/integration/mcp_e2e.py` 离线自检）。
+仓库里带了可运行的示例：`test/mcp_weather/server.py`（查天气，数据源 Open-Meteo，免费无 key；
+`MCP_WEATHER_STUB=1` 时不联网返回固定值，供 `test/mcp_weather/check.py` 离线自检）。
 
 ```
 POST /mcp   处理 initialize / tools/list / tools/call
@@ -127,7 +127,7 @@ curl -s http://127.0.0.1:5120/health
 改完之后想验证客户端这条链路本身有没有坏，离线跑：
 
 ```bash
-PYTHONPATH=. <env>/bin/python test/integration/mcp_e2e.py
+PYTHONPATH=. <env>/bin/python test/mcp_weather/check.py
 ```
 它会拉起 stub 服务，断言"发现工具 → 命名 `mcp_<服务>_<工具>` → 调用 → 结果规整"，
 外加"一台连不上不影响另一台"。

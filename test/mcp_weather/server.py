@@ -5,7 +5,7 @@
 为什么在 test/ 下
 -----------------
 它有两个用途，都在"验证"这一侧：
-1. **测试夹具**：`test/integration/mcp_e2e.py` 会拉起它（stub 模式，不联网），
+1. **测试夹具**：`test/mcp_weather/check.py` 会拉起它（stub 模式，不联网），
    验证"发现工具 → 包装成 mcp_<服务>_<工具> → 调用 → 结果规整"整条链路；
 2. **接入示例**：线上把它当一台真服务跑着（systemd `pa-mcp-weather`，127.0.0.1:5120），
    用来演示"把自己/别人的 HTTP 能力包成 streamable_http MCP"。
@@ -25,7 +25,7 @@
 跑法
 ----
     # 真实数据
-    PYTHONPATH=. <env>/bin/python -m uvicorn test.integration.mcp_weather_server:app --host 127.0.0.1 --port 5120
+    PYTHONPATH=. <env>/bin/python -m uvicorn test.mcp_weather.server:app --host 127.0.0.1 --port 5120
     # 离线桩（测试用，返回固定数据）
     MCP_WEATHER_STUB=1 PYTHONPATH=. <env>/bin/python -m uvicorn ... --port 5199
 

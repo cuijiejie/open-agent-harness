@@ -4,7 +4,7 @@
 
 做什么
 ------
-1. 用 `test/integration/mcp_weather_server.py`（stub 模式，不联网）拉起一台本地 MCP 服务；
+1. 用 `test/mcp_weather/server.py`（stub 模式，不联网）拉起一台本地 MCP 服务；
 2. 用项目的 `McpManager` 走完整链路：读配置 → 建连接 → `tools/list` → 包装成
    `mcp_<服务>_<工具>` → `ainvoke` 调用 → 返回值规整成文本；
 3. 再放一台坏服务（端口不通），断言**好的照常挂着、坏的记录错误**。
@@ -15,7 +15,7 @@
 
 跑法
 ----
-    PYTHONPATH=. <env>/bin/python test/integration/mcp_e2e.py
+    PYTHONPATH=. <env>/bin/python test/mcp_weather/check.py
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def main() -> int:
     port = free_port()
     env = {**os.environ, "PYTHONPATH": ROOT, "MCP_WEATHER_STUB": "1"}
     proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "test.integration.mcp_weather_server:app",
+        [sys.executable, "-m", "uvicorn", "test.mcp_weather.server:app",
          "--host", "127.0.0.1", "--port", str(port), "--log-level", "error"],
         cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
