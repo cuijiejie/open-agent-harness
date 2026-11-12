@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""MCP 服务管理接口（查看对所有登录用户开放；重连/重载/公共开关仅管理员）
+"""MCP 服务管理接口（查看对所有登录用户开放；增删改/重连/公共开关仅管理员）
 
 安全边界（务必保持）：
-MCP server 是**在应用机上启动的程序**，所以这里**只提供查看与连通性测试**，
-不提供"在页面上新增/修改 server"的能力 —— 那等于把任意命令执行开给界面用户。
-要加服务，仍然改 `configs.cfg` 的 `[mcp] servers=`（由管理员/运维操作，可审计可回滚）。
+- **远程服务（streamable_http / sse）**：应用主动出网去调别人的 MCP，不落地执行任何程序，
+  所以允许管理员在页面上自助配置（含鉴权头），每次写操作都记审计日志。
+- **stdio 服务**：由应用机起进程 = 远程执行，只能写在 `configs.cfg` 的 `[mcp] servers=`，
+  页面接口一律拒绝新增/修改/删除（返回 400 并说明原因）。
 """
 from __future__ import annotations
 
@@ -227,6 +228,131 @@ def update_server_meta(name: str, payload: dict | None = Body(None),
     except Exception as e:
         log.error(f"修改 MCP 元数据失败: {name}, err={e}", exc_info=True)
         return JSONResponse({"ok": False, "error": "修改失败（详见服务端日志）"}, status_code=500)
+
+
+def _after_change() -> None:
+    """配置变更后统一失效：工具缓存 / Redis 清单 / agent 实例"""
+    try:
+        from src.agent.mcp.client import mcp_manager
+
+        mcp_manager.reload()
+    except Exception:
+        pass
+    for key in ("cache:mcp:servers", "cache:tools:meta"):
+        try:
+            from src.infra.utils import CacheUtil
+
+            CacheUtil.delete(key)
+        except Exception:
+            pass
+    try:
+        from src.infra.RbacService import rbac as _rb
+        from src.infra.utils import CacheUtil
+
+        CacheUtil.delete_prefix("cache:rbac:catalog:")
+        _rb._bump_roles_ver()
+    except Exception:
+        pass
+    try:
+        from src.agent.main_agent import evict_all_agents
+
+        evict_all_agents()
+    except Exception:
+        pass
+
+
+@router.post("/api/mcp/servers")
+def create_server(payload: dict | None = Body(None), username: str = Depends(require_login)):
+    """新增**远程** MCP 服务（streamable_http / sse）——仅管理员
+
+    stdio 一律拒绝：那是"在服务器上起程序"，不能从页面开这个口子。
+    """
+    if not _is_admin(username):
+        return JSONResponse({"ok": False, "error": "仅管理员可新增 MCP 服务"}, status_code=403)
+    if not bool(getattr(cfg, "mcpEnabled", False)):
+        return JSONResponse({"ok": False, "error": "MCP 未启用（configs.cfg 的 [mcp] enabled）"},
+                            status_code=400)
+    body: dict = payload or {}
+    from src.agent.mcp.client import normalize_headers, validate_remote
+
+    name: str = str(body.get("name") or "").strip().lower()
+    transport: str = str(body.get("transport") or "streamable_http").strip().lower()
+    url: str = str(body.get("url") or "").strip()
+    err: str = validate_remote(name, transport, url)
+    if err:
+        return JSONResponse({"ok": False, "error": err}, status_code=400)
+    try:
+        from src.agent.mcp.server_bean import mcp_servers
+
+        res = mcp_servers.create_remote(
+            name, transport, url,
+            headers=normalize_headers(body.get("headers")),
+            display_name=str(body.get("display_name") or "")[:64],
+            note=str(body.get("note") or "")[:255],
+            actor=username,
+        )
+        if res.get("ok"):
+            _after_change()
+        log.warning(f"MCP 远程服务新增: user={username}, name={name}, transport={transport}, ok={res.get('ok')}")
+        return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+    except Exception as e:
+        log.error(f"新增 MCP 服务异常: {name}, err={e}", exc_info=True)
+        return JSONResponse({"ok": False, "error": "新增失败（详见服务端日志）"}, status_code=500)
+
+
+@router.put("/api/mcp/servers/{name}")
+def update_server(name: str, payload: dict | None = Body(None),
+                  username: str = Depends(require_login)):
+    """修改**远程** MCP 服务（URL / 鉴权头 / 显示名 / 说明 / 启用）——仅管理员"""
+    if not _is_admin(username):
+        return JSONResponse({"ok": False, "error": "仅管理员可修改 MCP 服务"}, status_code=403)
+    body: dict = payload or {}
+    from src.agent.mcp.client import REMOTE_TRANSPORTS, normalize_headers
+
+    transport = body.get("transport")
+    url = body.get("url")
+    if transport is not None and str(transport).strip().lower() not in REMOTE_TRANSPORTS:
+        return JSONResponse({"ok": False, "error": "传输方式只支持 streamable_http 或 sse"}, status_code=400)
+    if url is not None and not str(url).strip().lower().startswith(("http://", "https://")):
+        return JSONResponse({"ok": False, "error": "URL 必须以 http:// 或 https:// 开头"}, status_code=400)
+    try:
+        from src.agent.mcp.server_bean import mcp_servers
+
+        res = mcp_servers.update_remote(
+            name,
+            transport=str(transport).strip().lower() if transport is not None else None,
+            url=str(url).strip() if url is not None else None,
+            headers=normalize_headers(body.get("headers")) if "headers" in body else None,
+            display_name=body.get("display_name") if "display_name" in body else None,
+            note=body.get("note") if "note" in body else None,
+            enabled=bool(body.get("enabled")) if "enabled" in body else None,
+            actor=username,
+        )
+        if res.get("ok"):
+            _after_change()
+        log.warning(f"MCP 远程服务修改: user={username}, name={name}, ok={res.get('ok')}")
+        return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+    except Exception as e:
+        log.error(f"修改 MCP 服务异常: {name}, err={e}", exc_info=True)
+        return JSONResponse({"ok": False, "error": "修改失败（详见服务端日志）"}, status_code=500)
+
+
+@router.delete("/api/mcp/servers/{name}")
+def delete_server(name: str, username: str = Depends(require_login)):
+    """删除**远程** MCP 服务（stdio 服务由配置文件维护，不允许删除）——仅管理员"""
+    if not _is_admin(username):
+        return JSONResponse({"ok": False, "error": "仅管理员可删除 MCP 服务"}, status_code=403)
+    try:
+        from src.agent.mcp.server_bean import mcp_servers
+
+        res = mcp_servers.delete_remote(name, actor=username)
+        if res.get("ok"):
+            _after_change()
+        log.warning(f"MCP 远程服务删除: user={username}, name={name}, ok={res.get('ok')}")
+        return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+    except Exception as e:
+        log.error(f"删除 MCP 服务异常: {name}, err={e}", exc_info=True)
+        return JSONResponse({"ok": False, "error": "删除失败（详见服务端日志）"}, status_code=500)
 
 
 @router.post("/api/mcp/servers/{name}/test")

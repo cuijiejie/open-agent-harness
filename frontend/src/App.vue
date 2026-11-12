@@ -417,39 +417,63 @@
             </div>
             </div>
 
-            <!-- ===== MCP 服务（只读清单 + 测连接/重连；服务器只能在配置文件里声明） ===== -->
+            <!-- ===== MCP 服务（远程 streamable_http 可页面配置；stdio 只能写在配置文件） ===== -->
             <div v-show="toolsTab === 'mcp'">
               <div class="rbac-toolbar toolbar-right">
                 <button type="button" class="skill-act" @click="loadMcp">刷新</button>
                 <button v-if="mcpCanManage" type="button" class="skill-act" @click="reloadMcp">重新连接全部</button>
+                <button v-if="mcpCanManage && mcpEnabled" type="button" class="appr-ok" @click="startNewMcp">新增服务</button>
               </div>
+
               <div v-if="mcpEdit" class="mcp-edit-panel">
-              <div class="mcp-edit-title">编辑 <code>{{ mcpEdit }}</code> 的展示名</div>
-              <div class="mcp-edit-row">
-                <span>服务中文名</span>
-                <input v-model="mcpForm.display_name" class="inline-input" placeholder="如 示例服务（留空则显示服务名）" />
+                <div class="mcp-edit-title">
+                  {{ mcpForm.isNew ? '接入别人的 MCP 服务（streamable_http）' : '编辑 ' + mcpEdit }}
+                </div>
+                <div class="mcp-edit-row" v-if="mcpForm.isNew">
+                  <span>服务名</span>
+                  <input v-model="mcpForm.name" class="inline-input" placeholder="小写字母/数字/下划线，如 corp-wiki" />
+                </div>
+                <div class="mcp-edit-row">
+                  <span>服务中文名</span>
+                  <input v-model="mcpForm.display_name" class="inline-input" placeholder="如 公司 Wiki（留空显示服务名）" />
+                </div>
+                <div class="mcp-edit-row" v-if="mcpForm.isNew || mcpForm.remote">
+                  <span>接入地址</span>
+                  <input v-model="mcpForm.url" class="inline-input" placeholder="https://mcp.example.com/mcp" />
+                </div>
+                <div class="mcp-edit-row" v-if="mcpForm.isNew || mcpForm.remote">
+                  <span>请求头</span>
+                  <textarea v-model="mcpForm.headersText" class="inline-input mcp-headers-input"
+                            placeholder="每行一个，例如&#10;Authorization: Bearer xxxx"></textarea>
+                </div>
+                <div class="mcp-edit-row" v-if="mcpForm.remote && !mcpForm.isNew">
+                  <span>启用</span>
+                  <label class="mcp-enable"><input type="checkbox" v-model="mcpForm.enabled" /> 参与工具装配</label>
+                </div>
+                <div class="mcp-edit-row" v-for="tname in mcpFormTools" :key="tname">
+                  <span><code>{{ tname }}</code></span>
+                  <input v-model="mcpForm.tool_names[tname]" class="inline-input" placeholder="工具中文名，如 回显" />
+                </div>
+                <div class="mcp-edit-actions">
+                  <button type="button" class="appr-ok" :disabled="mcpSaving" @click="saveMcpServer">{{ mcpSaving ? '保存中…' : '保存' }}</button>
+                  <button type="button" class="skill-act" @click="mcpEdit = ''">取消</button>
+                </div>
+                <div class="skill-hint" style="margin-top:8px" v-if="mcpForm.isNew">
+                  stdio（在服务器上起进程）不能从页面新增，要接本地进程请写 <code>configs.cfg</code> 的 <code>[mcp] servers=</code>。
+                </div>
               </div>
-              <div class="mcp-edit-row" v-for="tname in mcpFormTools" :key="tname">
-                <span><code>{{ tname }}</code></span>
-                <input v-model="mcpForm.tool_names[tname]" class="inline-input" placeholder="工具中文名，如 回显" />
-              </div>
-              <div class="mcp-edit-actions">
-                <button type="button" class="appr-ok" :disabled="mcpSaving" @click="saveMcpMeta(mcpEdit)">{{ mcpSaving ? '保存中…' : '保存' }}</button>
-                <button type="button" class="skill-act" @click="mcpEdit = ''">取消</button>
-              </div>
-            </div>
-            <div v-if="mcpMsg" class="skill-msg">{{ mcpMsg }}</div>
+              <div v-if="mcpMsg" class="skill-msg">{{ mcpMsg }}</div>
               <div v-if="!mcpEnabled" class="skill-empty">
-                当前环境未启用 MCP。在 <code>configs.cfg</code> 的 <code>[mcp]</code> 段配置 <code>servers=[...]</code> 并重启服务即可。
+                当前环境未启用 MCP。把 <code>configs.cfg</code> 的 <code>[mcp] enabled</code> 改成 <code>true</code> 并重启服务即可。
               </div>
-              <div v-else-if="mcpLoading" class="skill-empty">加载中…（首次要探测各服务连接状态，约 1 秒）</div>
+              <div v-else-if="mcpLoading" class="skill-empty">加载中…</div>
               <div v-else-if="!mcpServers.length" class="skill-empty">
-                还没有配置 MCP 服务。<br />
-                <span class="skill-hint">新增/修改请改 <code>[mcp] servers=</code>（管理员操作，避免把任意命令执行开给界面）</span>
+                还没有接入 MCP 服务。<br />
+                <span class="skill-hint">点「新增服务」填对方 MCP 的 streamable_http 地址即可；需要鉴权就在请求头里填 Token。</span>
               </div>
               <div v-else class="table-wrap">
                 <div class="mcp-thead">
-                  <span>服务名</span><span>状态</span><span>启动命令</span><span>工具数</span><span>工具</span><span>公共</span><span>操作</span>
+                  <span>服务名</span><span>状态</span><span>接入方式</span><span>工具数</span><span>工具</span><span>公共</span><span>操作</span>
                 </div>
                 <div v-for="srv in mcpServers" :key="srv.name" class="mcp-row">
                   <div class="mcp-name-cell"><b>{{ srv.display_name || srv.name }}</b><span class="cell-muted"><code>{{ srv.name }}</code></span></div>
@@ -457,9 +481,12 @@
                     <span :style="{ color: srv.connected ? '#0f9d58' : '#d93025' }">
                       {{ srv.connected ? '已连接' : '未连接' }}
                     </span>
+                    <span v-if="srv.last_error" class="cell-muted" :title="srv.last_error"> ⚠</span>
                   </div>
-                  <div class="cell-muted" :title="(srv.command || '') + ' ' + ((srv.args || []).join(' '))">
-                    <code>{{ srv.command }} {{ (srv.args || []).join(' ') }}</code>
+                  <div class="cell-muted" :title="srv.transport === 'stdio' ? ((srv.command || '') + ' ' + ((srv.args || []).join(' '))) : (srv.url || '')">
+                    <span class="mcp-transport-chip">{{ srv.transport === 'stdio' ? 'stdio' : 'streamable_http' }}</span>
+                    <code v-if="srv.transport !== 'stdio'" class="mcp-url">{{ srv.url }}</code>
+                    <code v-else>{{ srv.command }} {{ (srv.args || []).join(' ') }}</code>
                   </div>
                   <div class="cell-muted">{{ srv.tool_count || (srv.tools || []).length }} 个</div>
                   <div class="cell-disp" :title="(srv.tools || []).join(', ')">
@@ -469,13 +496,12 @@
                     <span v-if="!(srv.tools || []).length">—</span>
                   </div>
                   <div>
-                    <!-- 公共：整个服务一起开关（名下所有工具） -->
                     <input type="checkbox" :checked="!!srv.public" :disabled="userBusy || !(srv.tools || []).length"
                            :title="srv.public ? '公共：所有角色自动拥有（点一下取消）' : '点一下把该服务全部工具设为公共'"
                            @change="toggleMcpPublic(srv)" />
                   </div>
                   <div class="rbac-user-actions">
-                    <button type="button" class="link-btn" @click="startEditMcp(srv)">编辑</button><button type="button" class="link-btn" :disabled="userBusy" @click="testMcp(srv.name)">测试</button>
+                    <button type="button" class="link-btn" @click="startEditMcp(srv)">编辑</button><button type="button" class="link-btn" :disabled="userBusy" @click="testMcp(srv.name)">测试</button><button v-if="mcpCanManage && srv.editable" type="button" class="link-btn link-danger" @click="deleteMcp(srv)">删除</button>
                   </div>
                 </div>
               </div>
@@ -2456,29 +2482,104 @@ const mcpLoading = ref(false)
 const mcpPage = ref(1)
 const mcpEdit = ref('')
 const mcpSaving = ref(false)
-const mcpForm = ref({ display_name: '', tool_names: {} })
+const mcpForm = ref({ isNew: false, name: '', display_name: '', url: '', headersText: '', enabled: true, remote: false, tool_names: {} })
 const mcpFormTools = computed(() => Object.keys(mcpForm.value.tool_names || {}))
+const startNewMcp = () => {
+  mcpForm.value = { isNew: true, name: '', display_name: '', url: '', headersText: '', enabled: true, remote: true, tool_names: {} }
+  mcpEdit.value = '（新增）'
+}
 const startEditMcp = (srv) => {
   const names = {}
   for (const t of (srv.tools || [])) names[t] = (srv.tool_display || {})[t] || (srv.tool_names || {})[t] || ''
-  mcpForm.value = { display_name: srv.display_name || '', tool_names: names }
+  const hdrs = srv.headers || {}
+  mcpForm.value = {
+    isNew: false,
+    name: srv.name,
+    display_name: srv.display_name || '',
+    url: srv.url || '',
+    headersText: Object.entries(hdrs).map(([k, v]) => `${k}: ${v}`).join('\n'),
+    enabled: srv.enabled !== false,
+    remote: srv.transport !== 'stdio',
+    tool_names: names,
+  }
   mcpEdit.value = srv.name
 }
-const saveMcpMeta = async (name) => {
+// 请求头：逐行 "K: V" → 字典（后端也支持这种文本，这里前端先规范化）
+const parseHeaderLines = (text) => {
+  const out = {}
+  for (const line of String(text || '').split('\n')) {
+    const t = line.trim()
+    if (!t || !t.includes(':')) continue
+    const i = t.indexOf(':')
+    const k = t.slice(0, i).trim()
+    if (k) out[k] = t.slice(i + 1).trim()
+  }
+  return out
+}
+const saveMcpServer = async () => {
+  const f = mcpForm.value
+  const hdrs = { 'Content-Type': 'application/json' }
   mcpSaving.value = true
   try {
-    const res = await fetch(`${apiBase}/api/mcp/servers/${encodeURIComponent(name)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(mcpForm.value),
-    })
-    const d = await res.json().catch(() => ({}))
-    if (!res.ok || d.ok === false) showToast(d.error || `保存失败（HTTP ${res.status}）`)
-    else { showToast('MCP 服务配置已保存'); mcpEdit.value = ''; await loadMcp(); await loadMcpMeta() }
+    if (f.isNew) {
+      const res = await fetch(`${apiBase}/api/mcp/servers`, {
+        method: 'POST',
+        headers: hdrs,
+        body: JSON.stringify({
+          name: String(f.name || '').trim().toLowerCase(),
+          transport: 'streamable_http',
+          url: String(f.url || '').trim(),
+          headers: parseHeaderLines(f.headersText),
+          display_name: f.display_name || '',
+        }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok || d.ok === false) { showToast(d.error || `新增失败（HTTP ${res.status}）`); return }
+      showToast('MCP 服务已接入')
+    } else {
+      if (f.remote) {
+        const res = await fetch(`${apiBase}/api/mcp/servers/${encodeURIComponent(f.name)}`, {
+          method: 'PUT',
+          headers: hdrs,
+          body: JSON.stringify({
+            url: String(f.url || '').trim(),
+            headers: parseHeaderLines(f.headersText),
+            enabled: !!f.enabled,
+            display_name: f.display_name || '',
+          }),
+        })
+        const d = await res.json().catch(() => ({}))
+        if (!res.ok || d.ok === false) { showToast(d.error || `保存失败（HTTP ${res.status}）`); return }
+      }
+      const res2 = await fetch(`${apiBase}/api/mcp/servers/${encodeURIComponent(f.name)}`, {
+        method: 'PATCH',
+        headers: hdrs,
+        body: JSON.stringify({ display_name: f.display_name || '', tool_names: f.tool_names || {} }),
+      })
+      const d2 = await res2.json().catch(() => ({}))
+      if (!res2.ok || d2.ok === false) { showToast(d2.error || `保存失败（HTTP ${res2.status}）`); return }
+      showToast('MCP 服务配置已保存')
+    }
+    mcpEdit.value = ''
+    await loadMcp()
+    await loadMcpMeta()
   } catch (e) {
     showToast('保存失败：' + e.message)
   } finally {
     mcpSaving.value = false
+  }
+}
+const deleteMcp = async (srv) => {
+  const label = srv.display_name || srv.name
+  if (!window.confirm(`确定删除 MCP 服务「${label}」？它的工具会立即从所有角色下线。`)) return
+  try {
+    const res = await fetch(`${apiBase}/api/mcp/servers/${encodeURIComponent(srv.name)}`, { method: 'DELETE' })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok || d.ok === false) { showToast(d.error || `删除失败（HTTP ${res.status}）`); return }
+    showToast('MCP 服务已删除')
+    await loadMcp()
+  } catch (e) {
+    showToast('删除失败：' + e.message)
   }
 }
 const catalogMcpMeta = ref({})
@@ -5145,7 +5246,7 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 /* ===== MCP 服务表格 ===== */
 .mcp-thead, .mcp-row {
   display: grid;
-  grid-template-columns: 140px 90px minmax(240px, 1.2fr) 80px minmax(200px, 1fr) 110px;
+  grid-template-columns: 140px 84px minmax(260px, 1.3fr) 72px minmax(180px, 1fr) 64px 150px;
   align-items: stretch;
 }
 .mcp-thead {
@@ -5162,6 +5263,17 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 .mcp-row:last-child { border-bottom: none; }
 .mcp-row > div:nth-child(3), .mcp-row > div:nth-child(5) { justify-content: flex-start; text-align: left; }
 .mcp-row code { font-size: 11.5px; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 传输标识：stdio 灰、streamable_http 紫，一眼看出这台是不是页面能改的 */
+.mcp-transport-chip {
+  flex: 0 0 auto; margin-right: 6px; padding: 1px 6px; border-radius: 5px;
+  font-size: 10.5px; font-family: ui-monospace, monospace;
+  background: #eef2ff; color: #4338CA; border: 1px solid #dbe1fb;
+}
+.mcp-url { flex: 1 1 auto; min-width: 0; }
+.mcp-headers-input { height: 68px; padding: 7px 8px; resize: vertical; line-height: 1.5; font-family: ui-monospace, monospace; font-size: 12px; }
+.mcp-enable { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: #475569; }
+.link-danger { color: #b91c1c; }
+.link-danger:hover { color: #dc2626; }
 
 /* ===== 工具管理：行内编辑 ===== */
 .inline-input {

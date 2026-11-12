@@ -29,7 +29,10 @@ ALLOWED_COMMANDS: tuple = ("python3", "python", "docker", "node", "npx", "uvx", 
 _DDL = """
 CREATE TABLE IF NOT EXISTS pa_mcp_servers (
   name       VARCHAR(32)  NOT NULL PRIMARY KEY,
-  command    VARCHAR(256) NOT NULL,
+  transport  VARCHAR(16)  NOT NULL DEFAULT 'stdio',
+  command    VARCHAR(256) NOT NULL DEFAULT '',
+  url        VARCHAR(512) NOT NULL DEFAULT '',
+  headers    JSON,
   args       JSON,
   env        JSON,
   display_name VARCHAR(64)  NOT NULL DEFAULT '',
@@ -46,6 +49,11 @@ CREATE TABLE IF NOT EXISTS pa_mcp_servers (
 _ALTERS = (
     "ALTER TABLE pa_mcp_servers ADD COLUMN display_name VARCHAR(64) NOT NULL DEFAULT ''",
     "ALTER TABLE pa_mcp_servers ADD COLUMN tool_names JSON NULL",
+    "ALTER TABLE pa_mcp_servers ADD COLUMN transport VARCHAR(16) NOT NULL DEFAULT 'stdio'",
+    "ALTER TABLE pa_mcp_servers ADD COLUMN url VARCHAR(512) NOT NULL DEFAULT ''",
+    "ALTER TABLE pa_mcp_servers ADD COLUMN headers JSON NULL",
+    # 远程服务没有 command，老表这一列是 NOT NULL 无默认值 → 放宽
+    "ALTER TABLE pa_mcp_servers MODIFY COLUMN command VARCHAR(256) NOT NULL DEFAULT ''",
 )
 
 
@@ -83,12 +91,13 @@ class McpServerService:
 
     # ---------- 读 ----------
     def list_servers(self, include_disabled: bool = False) -> list[dict]:
-        """[{name, command, args, env, note, enabled}]；读失败返回空（调用方回落 cfg）"""
+        """[{name, transport, command, url, headers, args, env, note, enabled}]；读失败返回空（调用方回落 cfg）"""
         if not self.ensure_schema():
             return []
         try:
             with self._conn() as c, c.cursor() as cur:
-                sql = ("SELECT name, command, args, env, note, enabled, display_name, tool_names FROM pa_mcp_servers "
+                sql = ("SELECT name, command, args, env, note, enabled, display_name, tool_names, "
+                       "transport, url, headers FROM pa_mcp_servers "
                        + ("" if include_disabled else "WHERE enabled=1 ")
                        + "ORDER BY sort_no, name")
                 cur.execute(sql)
@@ -111,13 +120,20 @@ class McpServerService:
                 tnames = json.loads(r[7]) if r[7] else {}
             except Exception:
                 tnames = {}
+            try:
+                headers = json.loads(r[10]) if r[10] else None
+            except Exception:
+                headers = None
             out.append({
-                "name": str(r[0]), "command": str(r[1]),
+                "name": str(r[0]), "command": str(r[1] or ""),
                 "args": [str(a) for a in (args or [])],
                 "env": env if isinstance(env, dict) else None,
                 "note": str(r[4] or ""), "enabled": bool(r[5]),
                 "display_name": str(r[6] or ""),
                 "tool_names": tnames if isinstance(tnames, dict) else {},
+                "transport": str(r[8] or "stdio"),
+                "url": str(r[9] or ""),
+                "headers": headers if isinstance(headers, dict) else None,
             })
         return out
 
@@ -149,9 +165,89 @@ class McpServerService:
             log.error(f"更新 MCP 元数据失败: {srv}, err={e}")
             return {"ok": False, "error": "更新失败（详见服务端日志）"}
 
+    # ---------- 页面自助管理（**仅远程传输**；stdio 起进程＝远程执行，只能改配置） ----------
+    def create_remote(self, name: str, transport: str, url: str, headers: dict | None = None,
+                      display_name: str = "", note: str = "", actor: str = "") -> dict:
+        if not self.ensure_schema():
+            return {"ok": False, "error": "数据库不可用"}
+        try:
+            with self._conn() as c, c.cursor() as cur:
+                cur.execute("SELECT transport FROM pa_mcp_servers WHERE name=%s", (name,))
+                row = cur.fetchone()
+                if row:
+                    return {"ok": False, "error": f"服务名 {name} 已存在"}
+                cur.execute(
+                    "INSERT INTO pa_mcp_servers (name, transport, command, url, headers, args, env, "
+                    "display_name, note, enabled, updated_by) VALUES (%s,%s,'',%s,%s,'[]','{}',%s,%s,1,%s)",
+                    (name, transport, url,
+                     json.dumps(headers or {}, ensure_ascii=False),
+                     display_name[:64], note[:255], actor[:64]),
+                )
+            log.warning(f"MCP 远程服务已新增: name={name}, transport={transport}, url={url}, actor={actor}")
+            return {"ok": True, "name": name}
+        except Exception as e:
+            log.error(f"新增 MCP 远程服务失败: {name}, err={e}")
+            return {"ok": False, "error": "新增失败（详见服务端日志）"}
+
+    def update_remote(self, name: str, transport: str | None = None, url: str | None = None,
+                      headers: dict | None = None, display_name: str | None = None,
+                      note: str | None = None, enabled: bool | None = None,
+                      actor: str = "") -> dict:
+        if not self.ensure_schema():
+            return {"ok": False, "error": "数据库不可用"}
+        sets: list[str] = []
+        args: list = []
+        if transport is not None:
+            sets.append("transport=%s"); args.append(transport)
+        if url is not None:
+            sets.append("url=%s"); args.append(url[:512])
+        if headers is not None:
+            sets.append("headers=%s"); args.append(json.dumps(headers, ensure_ascii=False))
+        if display_name is not None:
+            sets.append("display_name=%s"); args.append(str(display_name)[:64])
+        if note is not None:
+            sets.append("note=%s"); args.append(str(note)[:255])
+        if enabled is not None:
+            sets.append("enabled=%s"); args.append(1 if enabled else 0)
+        if not sets:
+            return {"ok": False, "error": "没有要修改的字段"}
+        sets.append("updated_by=%s"); args.append(actor[:64])
+        try:
+            with self._conn() as c, c.cursor() as cur:
+                cur.execute("SELECT transport FROM pa_mcp_servers WHERE name=%s", (name,))
+                row = cur.fetchone()
+                if not row:
+                    return {"ok": False, "error": f"MCP 服务 {name} 不在表里"}
+                if str(row[0]) == "stdio":
+                    return {"ok": False, "error": "stdio 服务由配置文件维护，页面不可改"}
+                cur.execute(f"UPDATE pa_mcp_servers SET {', '.join(sets)} WHERE name=%s", (*args, name))
+            log.warning(f"MCP 远程服务已修改: name={name}, fields={[x.split('=')[0] for x in sets]}, actor={actor}")
+            return {"ok": True, "name": name}
+        except Exception as e:
+            log.error(f"修改 MCP 远程服务失败: {name}, err={e}")
+            return {"ok": False, "error": "修改失败（详见服务端日志）"}
+
+    def delete_remote(self, name: str, actor: str = "") -> dict:
+        if not self.ensure_schema():
+            return {"ok": False, "error": "数据库不可用"}
+        try:
+            with self._conn() as c, c.cursor() as cur:
+                cur.execute("SELECT transport FROM pa_mcp_servers WHERE name=%s", (name,))
+                row = cur.fetchone()
+                if not row:
+                    return {"ok": False, "error": f"MCP 服务 {name} 不在表里"}
+                if str(row[0]) == "stdio":
+                    return {"ok": False, "error": "stdio 服务由配置文件维护，不能在这里删除"}
+                cur.execute("DELETE FROM pa_mcp_servers WHERE name=%s", (name,))
+            log.warning(f"MCP 远程服务已删除: name={name}, actor={actor}")
+            return {"ok": True, "name": name}
+        except Exception as e:
+            log.error(f"删除 MCP 远程服务失败: {name}, err={e}")
+            return {"ok": False, "error": "删除失败（详见服务端日志）"}
+
     # ---------- 首次种子：从配置文件迁移 ----------
     def seed(self, cfg_servers: list[dict]) -> int:
-        """表为空时把配置文件里的服务器写进来（幂等：已有同名就跳过）"""
+        """把配置文件里的服务器补进表（幂等：已有同名就跳过）"""
         if not cfg_servers or not self.ensure_schema():
             return 0
         n: int = 0
@@ -159,13 +255,17 @@ class McpServerService:
             with self._conn() as c, c.cursor() as cur:
                 for s in cfg_servers:
                     name: str = str(s.get("name") or "").strip()[:32]
+                    transport: str = str(s.get("transport") or "").strip() or (
+                        "streamable_http" if s.get("url") else "stdio")
                     command: str = str(s.get("command") or "").strip()
-                    if not name or not command:
+                    url: str = str(s.get("url") or "").strip()
+                    if not name or not (command or url):
                         continue
                     cur.execute(
-                        "INSERT IGNORE INTO pa_mcp_servers (name, command, args, env, note, updated_by) "
-                        "VALUES (%s,%s,%s,%s,%s,%s)",
-                        (name, command,
+                        "INSERT IGNORE INTO pa_mcp_servers (name, transport, command, url, headers, args, env, note, updated_by) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (name, transport, command, url,
+                         json.dumps(s.get("headers") or {}, ensure_ascii=False),
                          json.dumps([str(a) for a in (s.get("args") or [])], ensure_ascii=False),
                          json.dumps(s.get("env") or {}, ensure_ascii=False),
                          "由 configs.cfg 首次迁移", "system"),

@@ -14,7 +14,7 @@
 ## 核心能力
 
 - **流式对话**：SSE 逐字输出，支持中断恢复（LangGraph checkpointer 落 PostgreSQL）
-- **工具装配**：内置工具 + 插件工具 + 外部 MCP 服务，按角色过滤后交给模型
+- **工具装配**：内置工具 + 插件工具 + 外部 MCP 服务（管理员在页面上填 streamable_http 地址即可接入别人的 MCP），按角色过滤后交给模型
 - **沙箱执行**：OpenShell 容器隔离；闲置只停机不删文件，用户不存在才回收
 - **二级技能**：我的技能（沙箱内）/ 平台技能（全员可见、一键添加副本）
 - **文档知识库**：上传 PDF / Word / Excel / PPT，LlamaIndex 解析切分建索引（pgvector + 本地嵌入模型），
@@ -94,6 +94,7 @@ uvicorn src.app_fastapi:app --host 0.0.0.0 --port 5001 --workers 4   # http://lo
 首次登录先建管理员：`PYTHONPATH=. "$HOME/miniforge3/envs/oah/bin/python" deploy/seed_admin.py --password '你的密码'`（旧版的免密直登 `/test-login` 已删除）。
 
 **三步部署**（装环境 → 建库初始化 → 登录）见 [`docs/部署说明.md`](docs/部署说明.md)；
+MCP 怎么接、鉴权头怎么填、连不上怎么查见 [`docs/MCP接入说明.md`](docs/MCP接入说明.md)；
 日常运维、可选组件（沙箱 / MCP / Redis）、升级、排障见 [`docs/运维与排查.md`](docs/运维与排查.md)。
 
 **架构与设计**（分层、对话链路、工具装配、沙箱、数据模型、降级矩阵）见
