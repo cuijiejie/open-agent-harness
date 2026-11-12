@@ -3467,6 +3467,8 @@ const switchSession = async (id) => {
     inputText.value = ''
     selectedFiles.value = []
   }
+  // 打开哪个会话就把它写进 URL：刷新后能回到同一会话，而不是掉回空白新会话
+  persistSessionId(id)
   // 无论 id 是否与当前相同，都确保该会话的消息已加载（loadMessages 内部幂等）
   await loadMessages(id)
   await nextTick()
