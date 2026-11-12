@@ -884,7 +884,8 @@ class SandboxManager:
             files.append(f"/sandbox/{n}")
         return files
 
-    def collect_artifacts(self, username: str, session_id: str) -> tuple[list[dict], int]:
+    def collect_artifacts(self, username: str, session_id: str,
+                          since_ts: float | None = None) -> tuple[list[dict], int]:
         """把沙箱里的交付物回传到宿主机
 
         返回 ( 本轮回传的文件列表, 因上限被跳过的数量 )
@@ -895,6 +896,9 @@ class SandboxManager:
 
         成本：每轮收尾扫一次（2 次 ls + 1 次 stat），**只有内容变了才下载**
         （指纹存 .index.json）；已经生成过、内容没变的文件只补本地副本，不重复搬。
+
+        since_ts：本轮开始时间。传了它，"本轮新产出"就按 mtime > since_ts 判，
+        而不是 10 分钟窗口——避免"刚做完的报告在随后几轮被反复贴到回复末尾"。
         """
         result: list[dict] = []
         if not self.enabled:
@@ -954,8 +958,18 @@ class SandboxManager:
                 mtime_i = int(str(digest).split(":", 1)[1])
             except (IndexError, ValueError):
                 mtime_i = 0
-            recent: bool = mtime_i > 0 and (now_ts - mtime_i) <= _ARTIFACT_NEW_WINDOW_S
-            changed: bool = recent if first_run else (index.get(name) != digest)
+            # 判定"本轮新产出"：
+            #   ① 索引里见过 → 比指纹，变了才算（改过/重新生成）
+            #   ② 从没见过（新用户/索引丢失）→ 只认"本轮开始之后写的"，
+            #      不再用 10 分钟窗口，否则上一轮刚生成的文件会被反复贴到后面
+            #   ③ 没传 since_ts（老调用）→ 回落到 10 分钟窗口
+            prev: str | None = index.get(name)
+            if prev is not None:
+                changed: bool = prev != digest
+            elif since_ts:
+                changed = mtime_i > since_ts
+            else:
+                changed = mtime_i > 0 and (now_ts - mtime_i) <= _ARTIFACT_NEW_WINDOW_S
             need_copy: bool = changed or not os.path.isfile(local)
             candidates.append((remote, name, digest, changed, need_copy))
         candidates.sort(key=lambda x: (0 if x[3] else 1, 0 if x[4] else 1))
@@ -1497,7 +1511,8 @@ class SandboxManager:
                     found[p] = by_name[os.path.basename(p)]
         return found
 
-    async def acollect_artifacts(self, username: str, session_id: str) -> tuple[list[dict], int]:
+    async def acollect_artifacts(self, username: str, session_id: str,
+                                 since_ts: float | None = None) -> tuple[list[dict], int]:
         """异步版 `collect_artifacts`：口径与同步版完全一致
 
         单文件 100MB、每轮最多 5 个、超出不删除只提示、按"本轮新产出"优先占名额、
@@ -1556,8 +1571,18 @@ class SandboxManager:
                 mtime_i = int(str(digest).split(":", 1)[1])
             except (IndexError, ValueError):
                 mtime_i = 0
-            recent: bool = mtime_i > 0 and (now_ts - mtime_i) <= _ARTIFACT_NEW_WINDOW_S
-            changed: bool = recent if first_run else (index.get(name) != digest)
+            # 判定"本轮新产出"：
+            #   ① 索引里见过 → 比指纹，变了才算（改过/重新生成）
+            #   ② 从没见过（新用户/索引丢失）→ 只认"本轮开始之后写的"，
+            #      不再用 10 分钟窗口，否则上一轮刚生成的文件会被反复贴到后面
+            #   ③ 没传 since_ts（老调用）→ 回落到 10 分钟窗口
+            prev: str | None = index.get(name)
+            if prev is not None:
+                changed: bool = prev != digest
+            elif since_ts:
+                changed = mtime_i > since_ts
+            else:
+                changed = mtime_i > 0 and (now_ts - mtime_i) <= _ARTIFACT_NEW_WINDOW_S
             need_copy: bool = changed or not os.path.isfile(local)
             candidates.append((remote, name, digest, changed, need_copy))
         candidates.sort(key=lambda x: (0 if x[3] else 1, 0 if x[4] else 1))

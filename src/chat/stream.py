@@ -1383,7 +1383,8 @@ async def _process_chat_stream(session_id: str, username: str, message: str,
             # 却照样跑一遍 find（5~10 秒），done 因此被推迟，前端就一直转圈。
             _used_tools: bool = bool(acc.get("trace_tools") or acc.get("tools"))
             if sandbox_manager.enabled and _used_tools:
-                _arts, _skipped = await sandbox_manager.acollect_artifacts(username, session_id)
+                _arts, _skipped = await sandbox_manager.acollect_artifacts(
+                    username, session_id, since_ts=_turn_t0)
             # 只展示「这一轮新产出/有变化」的，或「回复里确实提到了她」的文件，
             # 避免每轮都把历史文件重复贴一遍
             _show: list = [
