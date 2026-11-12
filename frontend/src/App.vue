@@ -685,9 +685,14 @@
                         :disabled="kbUploading || !kbFile" @click="uploadKbDoc">
                   {{ kbUploading ? '上传中…' : '上传并索引' }}
                 </button>
-                <button type="button" class="skill-act know-refresh" :disabled="kbLoading"
-                        :title="kbAutoPolling ? '索引中，正在自动刷新' : '刷新文档状态'" @click="loadKbDocs()">
-                  {{ kbLoading ? '刷新中…' : '刷新' }}
+                <button type="button" :class="['kb-refresh-btn', { spinning: kbLoading }]" :disabled="kbLoading"
+                        :title="kbAutoPolling ? '索引中，每 5 秒自动刷新' : '刷新文档状态'" @click="loadKbDocs()">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                    <polyline points="21 3 21 9 15 9" />
+                  </svg>
+                  <span>刷新</span>
                 </button>
               </div>
               <div class="kb-hint kb-hint-line">
@@ -4302,6 +4307,19 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 /* 上传行居中：选择文件 / 范围 / 上传 / 刷新 一排摆中间，提示放下一行 */
 .know-add-center { justify-content: center; }
 .kb-hint-line { text-align: center; padding: 0 18px 12px; }
+/* 刷新按钮：浅靛底 + 边框 + 圆环箭头，和「上传并索引」区分开（次要动作） */
+.kb-refresh-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 34px; padding: 0 16px; border-radius: 10px;
+  background: #EEF2FF; border: 1px solid #C7D2FE; color: #4338CA;
+  font-size: 13px; font-weight: 500; cursor: pointer; transition: all .14s ease;
+}
+.kb-refresh-btn:hover:not(:disabled) { background: #E0E7FF; border-color: #A5B4FC; }
+.kb-refresh-btn:active:not(:disabled) { transform: translateY(1px); }
+.kb-refresh-btn:disabled { opacity: .55; cursor: default; }
+.kb-refresh-btn svg { width: 15px; height: 15px; }
+.kb-refresh-btn.spinning svg { animation: kb-spin 1s linear infinite; }
+@keyframes kb-spin { to { transform: rotate(360deg); } }
 .kb-polling { color: #6366F1; margin-left: 4px; }
 /* ===== 知识库子页签 ===== */
 .kb-tabs { display: flex; gap: 6px; padding: 0 18px 12px; }
