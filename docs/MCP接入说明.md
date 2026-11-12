@@ -94,27 +94,36 @@ MCP（Model Context Protocol）是"把别人的工具接进 agent"的标准协�
 
 ---
 
-## 五、把自己的服务包成 MCP（最简写法）
+## 五、把自己的服务包成 MCP
 
-不是所有能力都能在网上找到现成的 MCP 端点。自己包一层很小：一个 HTTP 服务 + 三个 JSON-RPC 方法。
+不是所有能力都能在网上找到现成的 MCP 端点。自己包一层很小：官方 `mcp` SDK 的 **FastMCP**
+负责协议（会话 / SSE / 单端点），我们只写工具；工具可以直接用 **LangChain 的 `@tool`** 定义，
+再用 `to_fastmcp` 转过去。
 
-仓库里带了可运行的示例：`test/mcp_weather/server.py`（查天气，数据源 Open-Meteo，免费无 key；
-`MCP_WEATHER_STUB=1` 时不联网返回固定值，供 `test/mcp_weather/check.py` 离线自检）。
+```python
+from langchain_core.tools import tool
+from langchain_mcp_adapters.tools import to_fastmcp
+from mcp.server.fastmcp import FastMCP
 
+@tool
+def get_weather(city: str) -> str:
+    """查询城市当前天气"""
+    ...
+
+mcp = FastMCP("mcp-weather", stateless_http=True, json_response=True)
+t = to_fastmcp(get_weather)
+try:
+    mcp.add_tool(t)                      # 新版 mcp 支持直接加 Tool
+except Exception:
+    mcp._tool_manager._tools[t.name] = t  # 1.30 只收函数，Tool 直接入 manager
+
+app = mcp.streamable_http_app()          # 单端点 /mcp，自带会话与 SSE
 ```
-POST /mcp   处理 initialize / tools/list / tools/call
-GET  /health
-```
 
-关键点：
+完整可运行示例：`test/mcp_weather/`（数据源 Open-Meteo，免费无 key），
+其中 `MCP_WEATHER_STUB=1` 时不联网、返回固定值，供 `check.py` 离线自检。
 
-- `initialize` 回 `{"protocolVersion": 客户端版本, "capabilities": {"tools": {}}, "serverInfo": {...}}`；
-- `tools/list` 回 `{"tools": [{name, description, inputSchema}]}`，**参数说明写在 inputSchema 里**，模型据此填参；
-- `tools/call` 回 `{"content": [{"type": "text", "text": "..."}], "isError": false}`；
-- 通知（没有 `id` 的消息）回 202 即可；
-- 直接返回 `application/json` 就行，不必实现 SSE 流式。
-
-部署到服务器（已内置 unit：`deploy/pa-mcp-weather.service`，跑的就是上面那个文件，监听 `127.0.0.1:5120`）：
+部署到服务器（已内置 unit：`deploy/pa-mcp-weather.service`，跑的就是这个示例，监听 `127.0.0.1:5120`）：
 
 ```bash
 cp deploy/pa-mcp-weather.service /etc/systemd/system/
@@ -124,10 +133,8 @@ curl -s http://127.0.0.1:5120/health
 
 然后在页面「新增服务」填 `http://127.0.0.1:5120/mcp`，点测试能看到 `get_weather`。
 
-改完之后想验证客户端这条链路本身有没有坏，离线跑：
+改完想验证客户端链路本身有没有坏，离线跑：
 
 ```bash
 PYTHONPATH=. <env>/bin/python test/mcp_weather/check.py
 ```
-它会拉起 stub 服务，断言"发现工具 → 命名 `mcp_<服务>_<工具>` → 调用 → 结果规整"，
-外加"一台连不上不影响另一台"。

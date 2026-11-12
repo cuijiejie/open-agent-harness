@@ -1,33 +1,40 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""示例 MCP 服务（streamable_http）：查天气
+"""MCP 天气示例服务：FastMCP（streamable_http）+ LangChain 工具定义
 
 为什么在 test/ 下
 -----------------
-它有两个用途，都在"验证"这一侧：
-1. **测试夹具**：`test/mcp_weather/check.py` 会拉起它（stub 模式，不联网），
-   验证"发现工具 → 包装成 mcp_<服务>_<工具> → 调用 → 结果规整"整条链路；
-2. **接入示例**：线上把它当一台真服务跑着（systemd `pa-mcp-weather`，127.0.0.1:5120），
-   用来演示"把自己/别人的 HTTP 能力包成 streamable_http MCP"。
+1. **测试夹具**：`test/mcp_weather/check.py` 会拉起它（stub 模式，不联网），验证
+   "发现工具 → 包装成 mcp_<服务>_<工具> → 调用 → 结果规整"整条链路；
+2. **接入示例**：线上把它当一台真服务跑着（systemd `pa-mcp-weather`，127.0.0.1:5120）。
 
-网上的天气 MCP 基本都是 stdio 小包（要 npm/pip 起进程），本项目只走 streamable_http，
-所以没有现成公开端点可用——这就是它存在的原因。
+为什么用 FastMCP 而不是手写 JSON-RPC
+------------------------------------
+手写只能覆盖 `tools/*`，会话、SSE、协议版本协商都要自己补。官方 `mcp` SDK 的
+`FastMCP` 把 streamable_http 这几块都实现了，我们只管写工具：
+    · 单端点 `/mcp`（POST 收发、GET 推送流、DELETE 结束会话）
+    · 会话（`Mcp-Session-Id`）与无状态两种模式（这里 stateless_http=True）
+    · SSE 与 JSON 两种响应（这里 json_response=True：工具一问一答够用）
 
-协议部分（最小实现）
---------------------
-    POST /mcp    JSON-RPC 2.0：initialize / tools/list / tools/call
-    GET  /health
+和 LangChain 的关系（容易被误解）
+---------------------------------
+`langchain-mcp-adapters` 是**客户端**（把 MCP 工具给 LangGraph 用）；
+服务端它只提供一个桥 `to_fastmcp(langchain_tool)` → FastMCP 的 `Tool`。
+所以"用 LangChain 写 MCP 服务端"就是三步：
+
+    @tool（LangChain 定义）→ to_fastmcp（转 Tool）→ FastMCP 承载
+
+注意 `mcp` 1.30 的 `FastMCP.add_tool()` 只收普通函数，而 `to_fastmcp` 产出的是
+`Tool` 对象（闭包签名是 `**arguments`，用函数注册会丢 schema），所以这里做一行兜底。
 
 数据源：Open-Meteo（免费、无需 key）
-    ① 地名 → 经纬度：https://geocoding-api.open-meteo.com/v1/search
-    ② 当前天气：    https://api.open-meteo.com/v1/forecast
+    https://geocoding-api.open-meteo.com/v1/search   地名 → 经纬度
+    https://api.open-meteo.com/v1/forecast           当前天气
 
 跑法
 ----
-    # 真实数据
     PYTHONPATH=. <env>/bin/python -m uvicorn test.mcp_weather.server:app --host 127.0.0.1 --port 5120
-    # 离线桩（测试用，返回固定数据）
-    MCP_WEATHER_STUB=1 PYTHONPATH=. <env>/bin/python -m uvicorn ... --port 5199
+    MCP_WEATHER_STUB=1 ...        # 离线桩，返回固定数据（自检用）
 
 接入：页面「MCP 服务 → 新增服务」填 `http://127.0.0.1:5120/mcp`。
 """
@@ -37,8 +44,11 @@ import logging
 import os
 
 import httpx
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from langchain_core.tools import tool
+from langchain_mcp_adapters.tools import to_fastmcp
+from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 log = logging.getLogger("mcp-weather")
 
@@ -61,48 +71,35 @@ WMO_ZH: dict[int, str] = {
     95: "雷阵雨", 96: "雷阵雨伴冰雹", 99: "强雷暴伴冰雹",
 }
 
-TOOLS: list[dict] = [
-    {
-        "name": "get_weather",
-        "description": "查询某个城市当前的天气：气温、体感温度、湿度、风速、天气状况。城市名中英文都行。",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "city": {"type": "string", "description": "城市名，如 北京、上海、Tokyo"},
-            },
-            "required": ["city"],
-        },
-    },
-]
 
-app = FastAPI(title="MCP 天气示例", docs_url=None, redoc_url=None)
-
-
-async def _geocode(city: str) -> dict:
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.get(GEOCODE_URL, params={"name": city, "count": 1, "language": "zh", "format": "json"})
-        r.raise_for_status()
-        data = r.json()
-    hits = data.get("results") or []
+def _geocode(city: str) -> dict:
+    r = httpx.get(GEOCODE_URL,
+                  params={"name": city, "count": 1, "language": "zh", "format": "json"},
+                  timeout=15)
+    r.raise_for_status()
+    hits = (r.json() or {}).get("results") or []
     if not hits:
         raise ValueError(f"没找到城市「{city}」，换个写法试试（如 北京 / Beijing）")
     return hits[0]
 
 
-async def _weather(city: str) -> str:
+# 工具用 LangChain 的 @tool 定义：docstring 就是给模型看的说明，
+# 参数类型 → inputSchema，和我们 agent 侧的工具口径完全一致。
+@tool
+def get_weather(city: str) -> str:
+    """查询某个城市当前的天气：气温、体感温度、湿度、风速、天气状况。城市名中英文都行。"""
     if STUB:
         return (f"{city}（stub） 当前天气：晴\n气温 20.0°C（体感 20.0°C）\n"
                 f"湿度 50%，风速 5.0 km/h\n观测时间 2026-01-01T12:00（当地时间）")
-    place = await _geocode(city)
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.get(FORECAST_URL, params={
-            "latitude": place["latitude"],
-            "longitude": place["longitude"],
-            "current": "temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code",
-            "timezone": "auto",
-        })
-        r.raise_for_status()
-        cur = (r.json().get("current") or {})
+    place = _geocode(city)
+    r = httpx.get(FORECAST_URL, params={
+        "latitude": place["latitude"],
+        "longitude": place["longitude"],
+        "current": "temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code",
+        "timezone": "auto",
+    }, timeout=15)
+    r.raise_for_status()
+    cur = (r.json() or {}).get("current") or {}
     desc = WMO_ZH.get(int(cur.get("weather_code") or -1), f"未知({cur.get('weather_code')})")
     label = f"{place.get('name')}（{place.get('admin1') or place.get('country') or ''}）"
     return (
@@ -113,56 +110,24 @@ async def _weather(city: str) -> str:
     )
 
 
-@app.get("/health")
-async def health() -> dict:
-    return {"ok": True, "service": "mcp-weather", "stub": STUB, "tools": [t["name"] for t in TOOLS]}
+mcp = FastMCP("mcp-weather", stateless_http=True, json_response=True)
+
+_fastmcp_tool = to_fastmcp(get_weather)
+try:
+    mcp.add_tool(_fastmcp_tool)                     # 新版本 mcp 可能直接支持 Tool 对象
+except Exception:                                   # 1.30 只收函数 → 直接放进 tool manager
+    mcp._tool_manager._tools[_fastmcp_tool.name] = _fastmcp_tool
+log.info("MCP 工具已注册: %s（stub=%s）", _fastmcp_tool.name, STUB)
 
 
-@app.post("/mcp")
-async def mcp(request: Request) -> Response:
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request) -> JSONResponse:
     try:
-        body = await request.json()
+        names = [t.name for t in mcp._tool_manager.list_tools()]
     except Exception:
-        return JSONResponse({"jsonrpc": "2.0", "id": None,
-                             "error": {"code": -32700, "message": "parse error"}}, status_code=400)
+        names = [_fastmcp_tool.name]
+    return JSONResponse({"ok": True, "service": "mcp-weather", "transport": "streamable_http",
+                         "stub": STUB, "tools": names})
 
-    method: str = str(body.get("method") or "")
-    req_id = body.get("id")
-    params: dict = body.get("params") or {}
 
-    # 通知（没有 id）：只回 202
-    if req_id is None:
-        return Response(status_code=202)
-
-    if method == "initialize":
-        return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": {
-            "protocolVersion": params.get("protocolVersion") or "2025-03-26",
-            "capabilities": {"tools": {}},
-            "serverInfo": {"name": "mcp-weather", "version": "1.0"},
-        }})
-
-    if method == "tools/list":
-        return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": {"tools": TOOLS}})
-
-    if method == "tools/call":
-        name: str = str(params.get("name") or "")
-        args: dict = params.get("arguments") or {}
-        if name != "get_weather":
-            return JSONResponse({"jsonrpc": "2.0", "id": req_id, "error": {
-                "code": -32601, "message": f"unknown tool: {name}"}})
-        city: str = str(args.get("city") or "").strip()
-        if not city:
-            return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": {
-                "content": [{"type": "text", "text": "缺少参数 city"}], "isError": True}})
-        try:
-            text = await _weather(city)
-            log.info("天气查询成功: city=%s stub=%s", city, STUB)
-            return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": {
-                "content": [{"type": "text", "text": text}], "isError": False}})
-        except Exception as e:
-            log.warning("天气查询失败: city=%s err=%s", city, e)
-            return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": {
-                "content": [{"type": "text", "text": f"查询失败：{str(e)[:200]}"}], "isError": True}})
-
-    return JSONResponse({"jsonrpc": "2.0", "id": req_id, "error": {
-        "code": -32601, "message": f"method not found: {method}"}})
+app = mcp.streamable_http_app()
