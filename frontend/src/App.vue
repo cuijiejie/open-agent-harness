@@ -673,7 +673,7 @@
 
             <!-- ===== 文档资料（RAG）===== -->
             <template v-else>
-              <div class="know-add">
+              <div class="know-add know-add-center">
                 <input id="kbFileInput" ref="kbFileInput" type="file" class="kb-file"
                        accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.txt,.md,.csv" @change="onKbFilePicked" />
                 <label for="kbFileInput" class="kb-file-btn">选择文件</label>
@@ -685,7 +685,14 @@
                         :disabled="kbUploading || !kbFile" @click="uploadKbDoc">
                   {{ kbUploading ? '上传中…' : '上传并索引' }}
                 </button>
-                <span class="kb-hint">{{ kbFileName || 'PDF / Word / Excel / PPT，≤20MB' }}</span>
+                <button type="button" class="skill-act know-refresh" :disabled="kbLoading"
+                        :title="kbAutoPolling ? '索引中，正在自动刷新' : '刷新文档状态'" @click="loadKbDocs()">
+                  {{ kbLoading ? '刷新中…' : '刷新' }}
+                </button>
+              </div>
+              <div class="kb-hint kb-hint-line">
+                {{ kbFileName || 'PDF / Word / Excel / PPT，≤20MB' }}
+                <span v-if="kbAutoPolling" class="kb-polling">· 有文档在索引，每 5 秒自动刷新</span>
               </div>
 
               <div class="know-add">
@@ -1738,7 +1745,28 @@ const kbStatusText = (st) => ({
   pending: '排队中', parsing: '解析中', ocr: 'OCR 识别中', embedding: '索引中', indexed: '可用', failed: '失败',
 }[st] || st || '—')
 
+// 有文档在"排队中/解析中/OCR/索引中"时每 5 秒自动拉一次，全部完成后自动停
+const KB_POLL_MS = 5000
+const kbAutoPolling = ref(false)
+let _kbPollTimer = null
+const _kbPending = () => (kbDocs.value || []).some(
+  (d) => ['pending', 'parsing', 'ocr', 'embedding'].includes(String(d.status || '')),
+)
+const stopKbPolling = () => {
+  if (_kbPollTimer) { clearTimeout(_kbPollTimer); _kbPollTimer = null }
+  kbAutoPolling.value = false
+}
+const scheduleKbPolling = () => {
+  if (_kbPollTimer) { clearTimeout(_kbPollTimer); _kbPollTimer = null }
+  if (!_kbPending()) { kbAutoPolling.value = false; return }
+  kbAutoPolling.value = true
+  _kbPollTimer = setTimeout(async () => {
+    _kbPollTimer = null
+    await loadKbDocs()
+  }, KB_POLL_MS)
+}
 const loadKbDocs = async () => {
+  if (kbLoading.value) return                 // 正在刷就跳过，避免叠请求
   kbLoading.value = true
   try {
     const res = await fetch(`${apiBase}/api/kb/docs?limit=200`)
@@ -1749,6 +1777,7 @@ const loadKbDocs = async () => {
     showToast('读取文档列表失败：' + e.message)
   } finally {
     kbLoading.value = false
+    scheduleKbPolling()
   }
 }
 
@@ -4270,6 +4299,10 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 .know-admin-add { display: flex; gap: 8px; margin-bottom: 12px; }
 .know-admin-add .prefs-input { flex: 1; }
 .know-add { display: flex; gap: 10px; align-items: center; padding: 0 18px 14px; }
+/* 上传行居中：选择文件 / 范围 / 上传 / 刷新 一排摆中间，提示放下一行 */
+.know-add-center { justify-content: center; }
+.know-hint-line { text-align: center; padding: 0 18px 12px; }
+.kb-polling { color: #6366F1; margin-left: 4px; }
 /* ===== 知识库子页签 ===== */
 .kb-tabs { display: flex; gap: 6px; padding: 0 18px 12px; }
 .kb-tab {
