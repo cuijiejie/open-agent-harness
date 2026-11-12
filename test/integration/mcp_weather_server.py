@@ -2,27 +2,39 @@
 # -*- coding: utf-8 -*-
 """示例 MCP 服务（streamable_http）：查天气
 
-为什么有这个文件
-----------------
-本项目的 MCP 客户端只认 streamable_http，而网上的天气 MCP 几乎都是 stdio 小包
-（要 npm/pip 起进程）。这个 80 行的服务演示"把一个普通 HTTP 能力包成 MCP"：
+为什么在 test/ 下
+-----------------
+它有两个用途，都在"验证"这一侧：
+1. **测试夹具**：`test/integration/mcp_e2e.py` 会拉起它（stub 模式，不联网），
+   验证"发现工具 → 包装成 mcp_<服务>_<工具> → 调用 → 结果规整"整条链路；
+2. **接入示例**：线上把它当一台真服务跑着（systemd `pa-mcp-weather`，127.0.0.1:5120），
+   用来演示"把自己/别人的 HTTP 能力包成 streamable_http MCP"。
 
-    POST /mcp  ← JSON-RPC 2.0（initialize / tools/list / tools/call）
+网上的天气 MCP 基本都是 stdio 小包（要 npm/pip 起进程），本项目只走 streamable_http，
+所以没有现成公开端点可用——这就是它存在的原因。
+
+协议部分（最小实现）
+--------------------
+    POST /mcp    JSON-RPC 2.0：initialize / tools/list / tools/call
     GET  /health
 
-数据源用 Open-Meteo（免费、无需 key、国内可访问）：
+数据源：Open-Meteo（免费、无需 key）
     ① 地名 → 经纬度：https://geocoding-api.open-meteo.com/v1/search
     ② 当前天气：    https://api.open-meteo.com/v1/forecast
 
-跑起来：
-    PYTHONPATH=. <env>/bin/python -m uvicorn deploy.mcp_weather.server:app --host 127.0.0.1 --port 5120
-然后到「技能与工具 → MCP 服务 → 新增服务」填：
-    服务名     weather
-    接入地址   http://127.0.0.1:5120/mcp
+跑法
+----
+    # 真实数据
+    PYTHONPATH=. <env>/bin/python -m uvicorn test.integration.mcp_weather_server:app --host 127.0.0.1 --port 5120
+    # 离线桩（测试用，返回固定数据）
+    MCP_WEATHER_STUB=1 PYTHONPATH=. <env>/bin/python -m uvicorn ... --port 5199
+
+接入：页面「MCP 服务 → 新增服务」填 `http://127.0.0.1:5120/mcp`。
 """
 from __future__ import annotations
 
 import logging
+import os
 
 import httpx
 from fastapi import FastAPI, Request, Response
@@ -32,6 +44,8 @@ log = logging.getLogger("mcp-weather")
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+# 测试/离线：不请求外网，返回固定值
+STUB: bool = str(os.getenv("MCP_WEATHER_STUB", "")).strip() in ("1", "true", "yes")
 
 # WMO 天气代码 → 中文
 WMO_ZH: dict[int, str] = {
@@ -76,6 +90,9 @@ async def _geocode(city: str) -> dict:
 
 
 async def _weather(city: str) -> str:
+    if STUB:
+        return (f"{city}（stub） 当前天气：晴\n气温 20.0°C（体感 20.0°C）\n"
+                f"湿度 50%，风速 5.0 km/h\n观测时间 2026-01-01T12:00（当地时间）")
     place = await _geocode(city)
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.get(FORECAST_URL, params={
@@ -98,7 +115,7 @@ async def _weather(city: str) -> str:
 
 @app.get("/health")
 async def health() -> dict:
-    return {"ok": True, "service": "mcp-weather", "tools": [t["name"] for t in TOOLS]}
+    return {"ok": True, "service": "mcp-weather", "stub": STUB, "tools": [t["name"] for t in TOOLS]}
 
 
 @app.post("/mcp")
@@ -139,7 +156,7 @@ async def mcp(request: Request) -> Response:
                 "content": [{"type": "text", "text": "缺少参数 city"}], "isError": True}})
         try:
             text = await _weather(city)
-            log.info("天气查询成功: city=%s", city)
+            log.info("天气查询成功: city=%s stub=%s", city, STUB)
             return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": {
                 "content": [{"type": "text", "text": text}], "isError": False}})
         except Exception as e:

@@ -98,7 +98,8 @@ MCP（Model Context Protocol）是"把别人的工具接进 agent"的标准协�
 
 不是所有能力都能在网上找到现成的 MCP 端点。自己包一层很小：一个 HTTP 服务 + 三个 JSON-RPC 方法。
 
-仓库里带了可运行的示例：`deploy/mcp_weather/`（查天气，数据源 Open-Meteo，免费无 key）。
+仓库里带了可运行的示例：`test/integration/mcp_weather_server.py`（查天气，数据源 Open-Meteo，免费无 key；
+`MCP_WEATHER_STUB=1` 时不联网返回固定值，供 `test/integration/mcp_e2e.py` 离线自检）。
 
 ```
 POST /mcp   处理 initialize / tools/list / tools/call
@@ -113,7 +114,7 @@ GET  /health
 - 通知（没有 `id` 的消息）回 202 即可；
 - 直接返回 `application/json` 就行，不必实现 SSE 流式。
 
-部署到服务器（已内置 unit：`deploy/pa-mcp-weather.service`，监听 `127.0.0.1:5120`）：
+部署到服务器（已内置 unit：`deploy/pa-mcp-weather.service`，跑的就是上面那个文件，监听 `127.0.0.1:5120`）：
 
 ```bash
 cp deploy/pa-mcp-weather.service /etc/systemd/system/
@@ -122,3 +123,11 @@ curl -s http://127.0.0.1:5120/health
 ```
 
 然后在页面「新增服务」填 `http://127.0.0.1:5120/mcp`，点测试能看到 `get_weather`。
+
+改完之后想验证客户端这条链路本身有没有坏，离线跑：
+
+```bash
+PYTHONPATH=. <env>/bin/python test/integration/mcp_e2e.py
+```
+它会拉起 stub 服务，断言"发现工具 → 命名 `mcp_<服务>_<工具>` → 调用 → 结果规整"，
+外加"一台连不上不影响另一台"。
