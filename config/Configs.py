@@ -157,7 +157,8 @@ class Configs(object):
 
         # 单轮护栏：超过时长或步数就收尾（实测有 1005 秒的一轮）
         self.turnMaxSeconds: int = _get('agent', 'turn_max_seconds', '600', int)
-        self.turnMaxSteps: int = _get('agent', 'turn_max_steps', '40', int)
+        # 0 = 不限步数（与 Hermes 默认一致：无限循环，靠模型收尾 + 用户插话打断）
+        self.turnMaxSteps: int = _get('agent', 'turn_max_steps', '0', int)
         # 沙箱资源上限（OpenShell create 参数；空=不限制）
         self.sandboxCpu: str = _get('agent', 'sandbox_cpu', '')
         self.sandboxMemory: str = _get('agent', 'sandbox_memory', '')

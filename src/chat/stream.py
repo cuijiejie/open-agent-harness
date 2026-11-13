@@ -1202,17 +1202,20 @@ async def _process_chat_stream(session_id: str, username: str, message: str,
                             # 单轮护栏：步数/时长任一超限就收尾（防止一轮跑十几分钟）
                             state["calls"] = int(state.get("calls") or 0) + 1
                             _elapsed: float = time.time() - _turn_t0
-                            _max_s: int = int(getattr(cfg, "turnMaxSeconds", 1200) or 1200)
-                            _max_n: int = int(getattr(cfg, "turnMaxSteps", 80) or 80)
-                            if _elapsed > _max_s or state["calls"] > _max_n:
+                            _max_s: int = int(getattr(cfg, "turnMaxSeconds", 3600) or 3600)
+                            # 0 = 不限步数：与 Hermes 一致（无限循环，靠模型自己收尾 + 用户随时插话打断）
+                            _max_n: int = int(getattr(cfg, "turnMaxSteps", 0) or 0)
+                            _over_steps: bool = bool(_max_n) and state["calls"] > _max_n
+                            if _elapsed > _max_s or _over_steps:
                                 state["budget_hit"] = True
                                 log.warning(
                                     f"单轮达到上限已收尾: session={session_id}, user={username}, "
                                     f"步数={state['calls']}, 耗时={int(_elapsed)}s"
                                 )
+                                _why: str = f"{_max_n} 步" if _over_steps else f"{_max_s} 秒"
                                 _note: str = (
                                     f"\n\n⏱ **本轮已执行 {state['calls']} 步 / {int(_elapsed)} 秒**，"
-                                    f"达到单轮上限（{_max_n} 步 / {_max_s} 秒），我先收尾。\n"
+                                    f"达到单轮上限（{_why}），我先收尾。\n"
                                     f"需要继续的话回一句「继续」，我接着往下做。"
                                 )
                                 # 必须同时累进 acc["text"]：full_response 是从它取的，
