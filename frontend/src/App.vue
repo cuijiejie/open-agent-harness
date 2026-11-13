@@ -246,6 +246,7 @@
                   </div>
                 </div>
                 <div class="msg-text markdown-body" v-html="renderMarkdown(m.content)"></div>
+                <div v-if="m.interrupted" class="msg-interrupted">已打断 · 你插话后这一轮提前收尾（已产出的内容保留）</div>
                 <div v-if="m.options && m.options.options && m.options.options.length" class="msg-options">
                   <div class="msg-options-btns">
                     <label
@@ -302,7 +303,6 @@
                 placeholder="输入消息..."
                 @keydown.enter.exact.prevent="sendMessage"
                 @input="autoResize"
-                :disabled="loading"
                 rows="1"
               ></textarea>
             </div>
@@ -315,9 +315,10 @@
               <button v-if="loading" @click="stopGenerating" class="send stop" title="停止生成">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
               </button>
-              <button v-else @click="sendMessage" class="send"
+              <button @click="sendMessage" class="send"
                 :disabled="!inputText.trim()&&!selectedFile"
-                :class="{on:inputText.trim()||selectedFile}">
+                :class="{on:inputText.trim()||selectedFile, interrupt: loading}"
+                :title="loading ? '发送并打断当前回答（改道）' : '发送'">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
               </button>
             </div>
@@ -3906,13 +3907,33 @@ const submitResume = async (resumeValue, displayText, msg) => {
   }
 }
 
-const stopGenerating = () => {
-  // 一键停止：abort 后 fetch 抛 AbortError，finally 里会释放 loading
+// 打断当前这一轮：中断流 + 把"思考中"的卡片收尾（已输出内容保留）
+const interruptTurn = async (reason) => {
   const sid = sessionId.value
   const ac = abortBySession[sid]
   if (ac) {
     try { ac.abort() } catch (e) { /* 忽略 */ }
   }
+  const list = messagesBySession.value[sid] || []
+  for (let i = list.length - 1; i >= 0; i--) {
+    const m = list[i]
+    if (m.role !== 'assistant') continue
+    const running = (m.steps || []).some((x) => x.status === 'running')
+    if (m.thinkingLive || running) {
+      m.thinkingLive = false
+      m.processOpen = false
+      m.thinkingMs = Date.now() - (m.thinkingT0 || Date.now())
+      ;(m.steps || []).forEach((x) => { if (x.status === 'running') x.status = 'done' })
+      m.interrupted = true
+      break
+    }
+  }
+  loadingBySession.value[sid] = false
+  if (reason === '用户插话') showToast('已打断上一轮，正在按你的新要求继续')
+}
+
+const stopGenerating = () => {
+  interruptTurn('用户停止')
 }
 
 const chooseOption = (msg, opt) => {
@@ -3937,7 +3958,8 @@ const confirmSelection = (msg) => {
 }
 
 const sendMessage = async () => {
-  if (loading.value) return
+  // 生成中直接发送 = 打断当前这一轮并改道（不用先点停止）
+  if (loading.value) await interruptTurn('用户插话')
   if (!inputText.value.trim() && !selectedFile.value) return
   const userText = inputText.value.trim()
   const sid = sessionId.value
@@ -4307,6 +4329,10 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 /* 上传行居中：选择文件 / 范围 / 上传 / 刷新 一排摆中间，提示放下一行 */
 .know-add-center { justify-content: center; }
 .kb-hint-line { text-align: center; padding: 0 18px 12px; }
+/* 生成中：发送按钮改成"会打断"的描边样式，和红色停止按钮区分 */
+.send.interrupt { background: #EEF2FF !important; color: #4338CA !important; box-shadow: inset 0 0 0 1px #C7D2FE; }
+.send.interrupt:hover { background: #E0E7FF !important; }
+.msg-interrupted { margin-top: 6px; font-size: 12px; color: #94a3b8; }
 /* 刷新按钮：浅靛底 + 边框 + 圆环箭头，和「上传并索引」区分开（次要动作） */
 .kb-refresh-btn {
   display: inline-flex; align-items: center; gap: 7px;
