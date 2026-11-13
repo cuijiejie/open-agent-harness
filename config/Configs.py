@@ -156,7 +156,7 @@ class Configs(object):
         self.contextCharBudget: int = _get('agent', 'context_char_budget', '60000', int)
 
         # 单轮护栏：超过时长或步数就收尾（实测有 1005 秒的一轮）
-        self.turnMaxSeconds: int = _get('agent', 'turn_max_seconds', '600', int)
+        self.turnMaxSeconds: int = _get('agent', 'turn_max_seconds', '0', int)
         # 单轮工具步数上限：设正数生效，0 = 不限制
         self.turnMaxSteps: int = _get('agent', 'turn_max_steps', '200', int)
         # 沙箱资源上限（OpenShell create 参数；空=不限制）
