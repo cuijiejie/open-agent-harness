@@ -218,7 +218,7 @@
                 <template v-if="m.role==='user'">{{ displayName.charAt(0) }}</template>
                 <template v-else>AI</template>
               </div>
-              <div class="msg-main">
+              <div :class="['msg-main', { 'msg-main-bare': m.interruptedEmpty }]">
                 <div class="msg-name" v-if="m.role==='user'">{{ displayName }}</div>
                 <div v-if="m.fileName" class="msg-file">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -245,7 +245,7 @@
                     <div v-if="m.thinking" class="proc-think">{{ m.thinking }}</div>
                   </div>
                 </div>
-                <div class="msg-text markdown-body" v-html="renderMarkdown(m.content)"></div>
+                <div v-if="m.content" class="msg-text markdown-body" v-html="renderMarkdown(m.content)"></div>
                 <div v-if="m.interrupted" :class="['msg-interrupted', { solo: m.interruptedEmpty }]">
                   {{ m.interruptedEmpty ? '已打断（这一轮还没有输出内容）' : '已打断 · 你插话后这一轮提前收尾（已产出的内容保留）' }}
                 </div>
@@ -4343,6 +4343,10 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 .send.interrupt { background: #EEF2FF !important; color: #4338CA !important; box-shadow: inset 0 0 0 1px #C7D2FE; }
 .send.interrupt:hover { background: #E0E7FF !important; }
 .msg-interrupted { margin-top: 6px; font-size: 12px; color: #94a3b8; }
+.msg.assistant .msg-main.msg-main-bare {
+  background: transparent !important; border: none !important;
+  box-shadow: none !important; padding: 0 !important; min-height: 0 !important;
+}
 .msg-interrupted.solo {
   margin-top: 0; display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 10px; border-radius: 8px; background: #f8fafc;
