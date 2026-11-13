@@ -246,7 +246,9 @@
                   </div>
                 </div>
                 <div class="msg-text markdown-body" v-html="renderMarkdown(m.content)"></div>
-                <div v-if="m.interrupted" class="msg-interrupted">已打断 · 你插话后这一轮提前收尾（已产出的内容保留）</div>
+                <div v-if="m.interrupted" :class="['msg-interrupted', { solo: m.interruptedEmpty }]">
+                  {{ m.interruptedEmpty ? '已打断（这一轮还没有输出内容）' : '已打断 · 你插话后这一轮提前收尾（已产出的内容保留）' }}
+                </div>
                 <div v-if="m.options && m.options.options && m.options.options.length" class="msg-options">
                   <div class="msg-options-btns">
                     <label
@@ -3920,11 +3922,19 @@ const interruptTurn = async (reason) => {
     if (m.role !== 'assistant') continue
     const running = (m.steps || []).some((x) => x.status === 'running')
     if (m.thinkingLive || running) {
+      const empty = !String(m.content || '').trim()
       m.thinkingLive = false
       m.processOpen = false
       m.thinkingMs = Date.now() - (m.thinkingT0 || Date.now())
       ;(m.steps || []).forEach((x) => { if (x.status === 'running') x.status = 'done' })
       m.interrupted = true
+      m.interruptedEmpty = empty
+      if (empty) {
+        // 一个字都没输出：不留折叠的"思考过程"，整张卡片收成一行
+        m.steps = []
+        m.thinking = ''
+        m.content = ''
+      }
       break
     }
   }
@@ -4333,6 +4343,11 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 .send.interrupt { background: #EEF2FF !important; color: #4338CA !important; box-shadow: inset 0 0 0 1px #C7D2FE; }
 .send.interrupt:hover { background: #E0E7FF !important; }
 .msg-interrupted { margin-top: 6px; font-size: 12px; color: #94a3b8; }
+.msg-interrupted.solo {
+  margin-top: 0; display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 8px; background: #f8fafc;
+  border: 1px dashed #e2e8f0; color: #94a3b8;
+}
 /* 刷新按钮：浅靛底 + 边框 + 圆环箭头，和「上传并索引」区分开（次要动作） */
 .kb-refresh-btn {
   display: inline-flex; align-items: center; gap: 7px;
