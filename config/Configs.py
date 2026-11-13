@@ -165,6 +165,7 @@ class Configs(object):
         self.kbKeywordMinHits: int = _get('kb', 'kb_keyword_min_hits', '2', int)
         self.kbKeywordMinSim: float = _get('kb', 'kb_keyword_min_sim', '0.15', float)
         self.kbMinScoreRatio: float = _get('kb', 'kb_min_score_ratio', '0.35', float)
+        self.kbMinScore: float = _get('kb', 'kb_min_score', '0.48', float)
         # 沙箱资源上限（OpenShell create 参数；空=不限制）
         self.sandboxCpu: str = _get('agent', 'sandbox_cpu', '')
         self.sandboxMemory: str = _get('agent', 'sandbox_memory', '')

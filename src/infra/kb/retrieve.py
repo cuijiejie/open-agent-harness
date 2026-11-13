@@ -172,13 +172,33 @@ class LocalRerank(BaseNodePostprocessor):
         return sorted(nodes, key=lambda n: n.score or 0.0, reverse=True)
 
 
+class MinScoreRetriever(BaseRetriever):
+    """套一层余弦下限：库里没有相关内容时返回空，而不是硬凑 top-k。
+
+    bge-m3（CLS 池化）实测：相关查询 top1 余弦 0.54~0.71，无关查询 0.36~0.46，
+    取 kb_min_score（默认 0.48）能干净分开。之前没有下限，问什么都回 5 条不相干片段。
+    """
+
+    def __init__(self, inner, min_score: float = 0.0, **kwargs) -> None:
+        self._inner = inner
+        self._min_score = float(min_score)
+        super().__init__(**kwargs)
+
+    def _retrieve(self, query_bundle: QueryBundle) -> list[NodeWithScore]:
+        nodes = self._inner.retrieve(query_bundle)
+        if self._min_score <= 0:
+            return nodes
+        return [n for n in nodes if float(n.score or 0.0) >= self._min_score]
+
+
 def _vector_retriever(owner: str):
     from src.infra.kb import index as kb_index
 
-    return kb_index.index().as_retriever(
+    inner = kb_index.index().as_retriever(
         similarity_top_k=int(_cfg("kbVecTop", VEC_TOP)),
         filters=scope_filters(owner),
     )
+    return MinScoreRetriever(inner, min_score=float(_cfg("kbMinScore", 0.48)))
 
 
 def fusion_retriever(owner: str) -> QueryFusionRetriever:
