@@ -160,7 +160,8 @@ class Configs(object):
         # 单轮工具步数上限：设正数生效，0 = 不限制
         self.turnMaxSteps: int = _get('agent', 'turn_max_steps', '200', int)
         # 知识库：嵌入并发批数 / 每批条数 / 关键词召回阈值 / 融合相对阈值
-        self.kbEmbedConcurrency: int = _get('kb', 'kb_embed_concurrency', '3', int)
+        self.kbIngestWorkers: int = _get('kb', 'kb_ingest_workers', '2', int)
+        self.kbEmbedConcurrency: int = _get('kb', 'kb_embed_concurrency', '2', int)
         self.kbEmbedBatch: int = _get('kb', 'kb_embed_batch', '8', int)
         self.kbKeywordMinHits: int = _get('kb', 'kb_keyword_min_hits', '2', int)
         self.kbKeywordMinSim: float = _get('kb', 'kb_keyword_min_sim', '0.15', float)

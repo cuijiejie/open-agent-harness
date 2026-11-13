@@ -27,6 +27,21 @@ from src.infra.utils.LogUtil import log
 _UNIT: str = "pa-kb-index-now"
 
 
+def _units() -> list[str]:
+    """可并发的 worker 槽位：kb_ingest_workers=1 时就是单槽（老行为）。
+
+    为什么用固定槽位而不是每次随机命名：槽位数即并发上限，
+    `--collect` 会让退出的 unit 自动消失，槽位随之释放。
+    """
+    try:
+        from config.Configs import cfg
+
+        n: int = max(1, min(4, int(getattr(cfg, "kbIngestWorkers", 2) or 2)))
+    except Exception:
+        n = 1
+    return [_UNIT] if n == 1 else [f"{_UNIT}-{i + 1}" for i in range(n)]
+
+
 def _root() -> str:
     # src/infra/kb/kick.py → 仓库根目录
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -43,28 +58,36 @@ def kick(reason: str = "") -> bool:
     # 同一时刻只允许一个（固定 unit 名，已存在则 systemd 直接拒绝 → 忽略即可，
     # 正在跑的那个 worker 会把任务表里的新任务一起捡走）
     if shutil.which("systemd-run"):
-        cmd = [
-            "systemd-run", "--collect", "--quiet", f"--unit={_UNIT}",
-            f"--working-directory={root}",
-            f"--property=Environment=PYTHONPATH={root}",
-            "--property=Environment=PYTHONUNBUFFERED=1",
-        ]
-        env_file = os.path.join(root, ".env")
-        if os.path.isfile(env_file):
-            cmd.append(f"--property=EnvironmentFile={env_file}")
-        cmd += [sys.executable, "-m", "src.infra.kb.ingest", "--once"]
-        try:
-            p = subprocess.run(cmd, capture_output=True, timeout=20, env=env)
+        # 依次尝试每个槽位：第一个空闲的槽位接活；全忙就等正在跑的 worker 顺手捡
+        busy: int = 0
+        for unit in _units():
+            cmd = [
+                "systemd-run", "--collect", "--quiet", f"--unit={unit}",
+                f"--working-directory={root}",
+                f"--property=Environment=PYTHONPATH={root}",
+                "--property=Environment=PYTHONUNBUFFERED=1",
+            ]
+            env_file = os.path.join(root, ".env")
+            if os.path.isfile(env_file):
+                cmd.append(f"--property=EnvironmentFile={env_file}")
+            cmd += [sys.executable, "-m", "src.infra.kb.ingest", "--once"]
+            try:
+                p = subprocess.run(cmd, capture_output=True, timeout=20, env=env)
+            except Exception as e:
+                log.warning(f"systemd-run 不可用，回退 Popen: {e}")
+                break
             if p.returncode == 0:
-                log.info(f"知识库索引已触发（systemd-run）: {reason}")
+                log.info(f"知识库索引已触发（systemd-run {unit}）: {reason}")
                 return True
-            if b"already exists" in (p.stderr or b"") or b"already loaded" in (p.stderr or b""):
-                log.info(f"知识库索引已在跑，跳过本次触发: {reason}")
-                return True
-            log.warning(f"systemd-run 触发失败，回退 Popen: "
-                        f"{(p.stderr or b'').decode('utf-8', 'ignore')[:200]}")
-        except Exception as e:
-            log.warning(f"systemd-run 不可用，回退 Popen: {e}")
+            err: str = (p.stderr or b"").decode("utf-8", "ignore")
+            if "already exists" in err or "already loaded" in err:
+                busy += 1
+                continue          # 这个槽位在忙，试下一个
+            log.warning(f"systemd-run 触发失败，回退 Popen: {err[:200]}")
+            break
+        if busy:
+            log.info(f"知识库 {busy} 个 worker 都在跑，等它们顺手捡走: {reason}")
+            return True
 
     # 兜底：脱离父进程直接跑（start_new_session，服务重启也不被带走）
     try:

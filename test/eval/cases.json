@@ -1,0 +1,51 @@
+[
+  {
+    "id": "kb-01",
+    "query": "Harness 的七层能力是什么",
+    "expect": "has_hits",
+    "expect_docs": ["Harness-Engineering-Agent工程范式.pptx"],
+    "note": "语义问法，必须命中 PPTX 而不是测试报告"
+  },
+  {
+    "id": "kb-02",
+    "query": "Sandbox 产物 CSV 不返回下载链接",
+    "expect": "has_hits",
+    "expect_docs": ["Open-Agent-Harness-测试报告-2026-11-10.md"],
+    "note": "字面特征明显（CSV/下载），关键词路 + 向量路都应命中"
+  },
+  {
+    "id": "kb-03",
+    "query": "CORS 白名单怎么配",
+    "expect": "has_hits",
+    "expect_docs": ["Open-Agent-Harness-测试报告-2026-11-10.md"],
+    "note": "配置类问法，余弦下限 0.48 的边界样本（实测 top1≈0.54）"
+  },
+  {
+    "id": "kb-04",
+    "query": "登录失败几次会被限速",
+    "expect": "has_hits",
+    "expect_docs": ["Open-Agent-Harness-测试报告-2026-11-10.md"],
+    "note": "纯语义改写，库里写的是「20 次/分钟」"
+  },
+  {
+    "id": "kb-05",
+    "query": "红烧肉的做法",
+    "expect": "no_hits",
+    "expect_docs": [],
+    "note": "完全无关：修复前会返回 5 条噪声，现在应为 0 条"
+  },
+  {
+    "id": "kb-06",
+    "query": "QAZZZZ123456",
+    "expect": "no_hits",
+    "expect_docs": [],
+    "note": "不存在的编号：不应硬凑结果"
+  },
+  {
+    "id": "kb-07",
+    "query": "今天北京的天气",
+    "expect": "no_hits",
+    "expect_docs": [],
+    "note": "应走 MCP 天气工具，而不是编造知识库命中"
+  }
+]
