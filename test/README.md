@@ -11,6 +11,7 @@ bash test/run_all.sh        # 单元 + 前端纯函数 + 静态检查，一条�
 单跑某个文件：`python -m unittest test.unit.test_core -v`（`-t .` 让包内 `__init__.py` 生效，测试会自带占位环境变量） |
 | `js/` | 前端纯函数测试（node） | node |
 | `integration/` | 端到端自检（不参与 run_all）：`kb_e2e.py` 需真 PG+pgvector | PG + 嵌入服务 |
+| `eval/` | 检索冒烟评测（7 条用例，对已部署实例跑）：`python test/eval/run_eval.py` | 线上实例 + 会话 |
 | `mcp_weather/` | MCP 示例服务（streamable_http）+ 离线自检 `check.py` | 无网络也可跑（stub） |
 | `tools/` | 静态检查脚本（未定义名字等） | 无 |
 | `hooks/` | 可选的 git pre-commit 钩子 | — |
