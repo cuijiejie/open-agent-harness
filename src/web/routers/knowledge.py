@@ -92,7 +92,8 @@ def update_knowledge(kid: int, payload: dict | None = Body(None),
             return JSONResponse({"error": "知识不存在或无权操作"}, status_code=404)
         if row["scope"] == "global" and not _is_admin(username):
             return JSONResponse({"error": "只有管理员可以修改共享知识"}, status_code=403)
-        if row["scope"] == "user" and row.get("username") != username and not _is_admin(username):
+        if row["scope"] == "user" and row.get("username") != username:
+            # 个人知识只有本人能改；管理员要清理只能删（删除接口允许管理员）
             return JSONResponse({"error": "只能修改自己的知识"}, status_code=403)
 
         data = payload or {}

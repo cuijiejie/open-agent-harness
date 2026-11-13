@@ -233,11 +233,14 @@ def next_task() -> dict | None:
     with pool().connection() as c, c.cursor() as cur:
         cur.execute(
             "UPDATE kb_task SET state='running', attempts=attempts+1, updated_at=now() "
-            "WHERE id = (SELECT id FROM kb_task "
-            "            WHERE (state IN ('pending','failed') AND attempts < 3) "
-            "               OR (state = 'running' "
-            "                   AND updated_at < now() - (%s || ' minutes')::interval) "
-            "            ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED) "
+            "WHERE id = (SELECT t.id FROM kb_task t "
+            "            LEFT JOIN kb_doc d ON d.id = t.doc_id "
+            "            WHERE (t.state IN ('pending','failed') AND t.attempts < 3) "
+            "               OR (t.state = 'running' "
+            "                   AND t.updated_at < now() - (%s || ' minutes')::interval) "
+            # 小文件优先：大文档（几百块）会把 worker 占住十几分钟，
+            # 按 id 先进先出时用户刚传的小文件排在它后面，看起来像"卡死不动"。
+            "            ORDER BY COALESCE(d.size_kb, 0) ASC, t.id ASC LIMIT 1 FOR UPDATE OF t SKIP LOCKED) "
             "RETURNING id, doc_id, kind, attempts",
             (str(_STALE_RUNNING_MIN),),
         )

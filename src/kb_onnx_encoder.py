@@ -8,9 +8,14 @@
 `onnxruntime` 和 `tokenizers`（fastembed 的依赖）。所以直接跑 ONNX，
 不必为了一个模型装 torch（CPU wheel 800MB+，内存还要多吃 2~3 GB）。
 
-对外只有 `encode(texts) -> list[list[float]]`，口径与 fastembed 一致：
-XLM-RoBERTa tokenizer → 均值池化（带 attention mask）→ L2 归一化。
+对外只有 `encode(texts) -> list[list[float]]`：
+XLM-RoBERTa tokenizer → **CLS 池化**（bge-m3 官方口径）→ L2 归一化。
 bge-m3 不需要 query/passage 前缀。
+
+坑（2026-11-13 实测）：早期这里用的是「均值池化」，bge-m3 会退化成
+"什么都很像"——无关中文片段的余弦都在 0.70 上下，排序基本随机，
+检索看起来"永远命中一堆不相关内容"。改成取 [CLS] 后区分度恢复正常。
+换池化方式必须重建索引（老向量与新向量不兼容）。
 """
 from __future__ import annotations
 
@@ -77,11 +82,15 @@ class OnnxBgeEncoder:
             if "token_type_ids" in self._inputs:
                 feed["token_type_ids"] = np.zeros_like(ids)
             hidden = self._sess.run([self._output], {k: v for k, v in feed.items() if k in self._inputs})[0]
-            # 均值池化（只算有效 token），再做 L2 归一化 → 余弦相似度=内积
-            m = mask[..., None].astype(np.float32)
-            summed = (hidden.astype(np.float32) * m).sum(axis=1)
-            counts = np.clip(m.sum(axis=1), 1e-9, None)
-            vecs = summed / counts
+            hidden = hidden.astype(np.float32)
+            # bge-m3 官方口径是 CLS 池化：last_hidden_state[:, 0]。
+            # 均值池化会让向量趋同（无关文本余弦也有 0.7），检索精度明显变差；
+            # EMBED_POOLING=mean 可退回旧行为（仅用于对比实验，需重建索引）。
+            if os.environ.get("EMBED_POOLING", "cls").strip().lower() == "mean":
+                m = mask[..., None].astype(np.float32)
+                vecs = (hidden * m).sum(axis=1) / np.clip(m.sum(axis=1), 1e-9, None)
+            else:
+                vecs = hidden[:, 0, :]
             norms = np.linalg.norm(vecs, axis=1, keepdims=True)
             vecs = vecs / np.clip(norms, 1e-9, None)
             out.extend(vecs.tolist())
