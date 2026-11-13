@@ -1202,11 +1202,14 @@ async def _process_chat_stream(session_id: str, username: str, message: str,
                             # 单轮护栏：步数/时长任一超限就收尾（防止一轮跑十几分钟）
                             state["calls"] = int(state.get("calls") or 0) + 1
                             _elapsed: float = time.time() - _turn_t0
-                            _max_s: int = int(getattr(cfg, "turnMaxSeconds", 3600) or 3600)
-                            # 0 = 不限步数：与 Hermes 一致（无限循环，靠模型自己收尾 + 用户随时插话打断）
-                            _max_n: int = int(getattr(cfg, "turnMaxSteps", 0) or 0)
-                            _over_steps: bool = bool(_max_n) and state["calls"] > _max_n
-                            if _elapsed > _max_s or _over_steps:
+                            # 两个维度彼此独立，都可设 0 关闭：
+                            #   turn_max_steps   = 工具调用步数（对应 Hermes 的 max_iterations）
+                            #   turn_max_seconds = 墙钟秒数（Hermes 没有这一项，本项目的护栏）
+                            _max_s: int = int(getattr(cfg, "turnMaxSeconds", 3600) or 0)
+                            _max_n: int = int(getattr(cfg, "turnMaxSteps", 200) or 0)
+                            _over_time: bool = _max_s > 0 and _elapsed > _max_s
+                            _over_steps: bool = _max_n > 0 and state["calls"] > _max_n
+                            if _over_time or _over_steps:
                                 state["budget_hit"] = True
                                 log.warning(
                                     f"单轮达到上限已收尾: session={session_id}, user={username}, "
