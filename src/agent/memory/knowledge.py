@@ -83,6 +83,24 @@ def _keywords(text: str) -> list[str]:
     return out[:24]
 
 
+def _norm_tags(tags) -> str:
+    """tags 允许 str 或 list（前端/接口可能传数组），统一成逗号分隔字符串。
+
+    历史上 add 用 str() 强转、update 直接 .strip()，传数组时一个存成 "['QA']"、
+    另一个直接 500（'list' object has no attribute 'strip'）。
+    """
+    if tags is None:
+        return ""
+    if isinstance(tags, (list, tuple, set)):
+        parts: list[str] = []
+        for x in tags:
+            v: str = str(x).strip()
+            if v and v not in parts:
+                parts.append(v)
+        return ",".join(parts)[:200]
+    return str(tags).strip()[:200]
+
+
 def add(content: str, tags: str = "", scope: str = "user", username: str = "",
         project: str = "", expires_at: str | None = None) -> dict:
     content = (content or "").strip()
@@ -105,7 +123,7 @@ def add(content: str, tags: str = "", scope: str = "user", username: str = "",
             cur.execute(
                 "INSERT INTO pa_knowledge (scope, username, content, tags, project, created_by, expires_at) "
                 "VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                (scope, username or None, content, (tags or "").strip()[:200], project,
+                (scope, username or None, content, _norm_tags(tags), project,
                  username or "admin", expires_at or None),
             )
             new_id = cur.lastrowid
@@ -168,7 +186,7 @@ def update(kid: int, content: str | None = None, tags: str | None = None) -> dic
         args.append(content)
     if tags is not None:
         sets.append("tags=%s")
-        args.append((tags or "").strip()[:200])
+        args.append(_norm_tags(tags))
     if not sets:
         return {"ok": False, "error": "没有要修改的字段"}
     conn = _conn()

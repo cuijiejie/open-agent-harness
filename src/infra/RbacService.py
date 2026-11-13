@@ -862,6 +862,21 @@ class RbacService:
                 or any(ord(ch) < 32 for ch in user):
             return {"ok": False, "error": "账号不合法（不能含路径分隔符/..，长度 ≤64）"}
         self.ensure_schema()
+        # 先校验角色码：不存在的角色码若放过去，用户会被建成"无任何角色"，
+        # 界面上只显示"无角色"，管理员看不出是拼错了（静默错配）。
+        codes: list[str] = [str(r).strip() for r in (roles or []) if str(r).strip()]
+        if codes:
+            try:
+                with self._conn() as c, c.cursor() as cur:
+                    _q: str = ",".join(["%s"] * len(codes))
+                    cur.execute(f"SELECT role_code FROM pa_roles WHERE role_code IN ({_q})", tuple(codes))
+                    known: set = {str(r[0]) for r in cur.fetchall()}
+            except Exception as e:
+                log.error(f"校验角色失败: {e}")
+                return {"ok": False, "error": "校验角色失败（详见服务端日志）"}
+            unknown: list[str] = [_rc for _rc in codes if _rc not in known]
+            if unknown:
+                return {"ok": False, "error": f"角色不存在: {', '.join(unknown)}"}
         try:
             with self._conn() as c, c.cursor() as cur:
                 cur.execute("SELECT status FROM pa_users WHERE username=%s", (user,))
@@ -876,7 +891,6 @@ class RbacService:
                     (user, (display_name or "")[:128],
                      self.hash_password(str(password or "").strip() or self.DEFAULT_NEW_USER_PASSWORD)),
                 )
-            codes: list[str] = [r for r in (roles or []) if str(r).strip()]
             if not codes:                     # 不传角色 → 默认挂公共角色
                 _d: str = self.default_role_code()
                 if _d:

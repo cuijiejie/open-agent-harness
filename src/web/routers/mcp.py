@@ -411,6 +411,19 @@ def set_server_public(name: str, payload: dict | None = Body(None),
         if not tools:      # 冷启动时还没探测出清单 → 用 pa_tools 里已登记的工具
             tools = sorted(k for k in (tool_meta.all() or {}) if k.startswith(f"mcp_{name}_"))
         if not tools:
+            # 还是空 → 用「测试连接」时落库的清单（别的 worker 探测过也算数）
+            try:
+                from src.agent.mcp import server_bean as _sb
+
+                _srv = next((x for x in _sb.mcp_servers.list_servers() if str(x.get("name")) == name), {})
+                _tn = _srv.get("tool_names") or {}
+                if isinstance(_tn, dict):
+                    tools = [f"mcp_{name}_{k}" if not str(k).startswith("mcp_") else str(k) for k in _tn.keys()]
+                elif isinstance(_tn, list):
+                    tools = [str(k) for k in _tn]
+            except Exception:
+                tools = []
+        if not tools:
             return JSONResponse({"ok": False, "error": "该服务还没有工具清单，先点一次「刷新」再试"},
                                 status_code=400)
 

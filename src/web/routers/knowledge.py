@@ -61,7 +61,7 @@ def add_knowledge(payload: dict | None = Body(None), username: str = Depends(req
     try:
         data = payload or {}
         content = str(data.get("content") or "").strip()
-        tags = str(data.get("tags") or "").strip()
+        tags = data.get("tags") or ""      # 数组/字符串都接受，统一在 knowledge._norm_tags 处理
         scope = str(data.get("scope") or "user").strip()
 
         if not content:

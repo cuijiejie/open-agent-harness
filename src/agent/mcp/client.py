@@ -285,6 +285,11 @@ class McpManager:
                 t.name for t in (self._tools_cache or []) if t.name.startswith(f"mcp_{name}_")
             ]
             probe = self._probe.get(name) or {}
+            # 刚点过「测试连接」但还没全量装配过工具时，_tools_cache 是空的；
+            # 这里用探测结果补上，否则「设为公共」会一直报"还没有工具清单"。
+            if not tools and probe.get("tools"):
+                _raw: list[str] = [str(n) for n in (probe.get("tools") or []) if str(n).strip()]
+                tools = [n if n.startswith(f"mcp_{name}_") else f"mcp_{name}_{n}" for n in _raw]
             out.append({
                 "name": name,
                 "display_name": str(srv.get("display_name") or ""),
@@ -319,6 +324,16 @@ class McpManager:
             self._probe[name] = {"ok": True, "error": "", "tools": names, "ts": time.time()}
             self._tools_cache = None      # 下次装配重新生成
             self._cache_ts = 0.0
+            # 同时把清单写进库（pa_mcp_servers.tool_names）：4 个 worker 各有一份内存，
+            # 只存内存的话「测试连接」之后在别的 worker 上「设为公共」会报"还没有工具清单"。
+            try:
+                from src.agent.mcp import server_bean as _sb
+
+                _srv = next((x for x in _sb.mcp_servers.list_servers() if str(x.get("name")) == name), {})
+                _old: dict = _srv.get("tool_names") or {}
+                _sb.mcp_servers.update_meta(name, tool_names={**{n: n for n in names}, **_old})
+            except Exception as e:
+                log.warning(f"MCP 工具清单落库失败: server={name}, err={e}")
             try:
                 from src.infra.utils import CacheUtil
 
