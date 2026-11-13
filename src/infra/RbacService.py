@@ -953,6 +953,12 @@ class RbacService:
                     if int(cur.fetchone()[0] or 0) == 0:
                         return {"ok": False, "error": "这是最后一个管理员，不能删除（会没人能管理系统设置）"}
                 cur.execute("UPDATE pa_users SET status='deleted' WHERE username=%s", (user,))
+                # 个人业务知识跟着账号一起清：否则会留下 owner 已不存在的孤儿条目，
+                # 界面上谁也看不到、管理员也删不掉（scope=user 只允许本人操作）
+                try:
+                    cur.execute("DELETE FROM pa_knowledge WHERE scope='user' AND username=%s", (user,))
+                except Exception as e:
+                    log.warning(f"级联清理个人知识失败（继续删号）: user={user}, err={e}")
                 # 软删的用户不该继续占着角色：否则这角色永远删不掉
                 # （delete_role 会回"还有 N 个用户在用"，而那个用户早已被删）
                 cur.execute("DELETE FROM pa_user_roles WHERE username=%s", (user,))

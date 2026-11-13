@@ -92,8 +92,8 @@ def update_knowledge(kid: int, payload: dict | None = Body(None),
             return JSONResponse({"error": "知识不存在或无权操作"}, status_code=404)
         if row["scope"] == "global" and not _is_admin(username):
             return JSONResponse({"error": "只有管理员可以修改共享知识"}, status_code=403)
-        if row["scope"] == "user" and row.get("username") != username:
-            return JSONResponse({"error": "知识不存在或无权操作"}, status_code=404)
+        if row["scope"] == "user" and row.get("username") != username and not _is_admin(username):
+            return JSONResponse({"error": "只能修改自己的知识"}, status_code=403)
 
         data = payload or {}
         res = K.update(kid,
@@ -122,7 +122,8 @@ def delete_knowledge(kid: int, username: str = Depends(require_login)):
             return JSONResponse({"error": "知识不存在或无权操作"}, status_code=404)
         if row["scope"] == "global" and not _is_admin(username):
             return JSONResponse({"error": "只有管理员可以删除共享知识"}, status_code=403)
-        if row["scope"] == "user" and row.get("username") != username:
+        if row["scope"] == "user" and row.get("username") != username and not _is_admin(username):
+            # 管理员要能清理已删用户留下的个人知识，否则这些条目永远删不掉
             return JSONResponse({"error": "知识不存在或无权操作"}, status_code=404)
 
         res = K.delete(kid, allow_global=True)   # 归属/管理员校验已在上面做完

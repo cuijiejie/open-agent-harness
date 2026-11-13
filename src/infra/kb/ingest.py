@@ -116,9 +116,14 @@ def index_doc(doc_id: int) -> dict:
         return {"ok": False, "error": f"解析失败：{e}"}
 
     store.set_doc_status(doc_id, "embedding")
+    store.set_doc_progress(doc_id, 0)
+
+    def _prog(done: int, total: int) -> None:
+        store.set_doc_progress(doc_id, done)     # 界面片段数实时增长
+
     try:
         kb_index.delete_doc(doc_id)          # 重建索引：先清旧向量，否则会留重复
-        n = kb_index.add_documents(docs)
+        n = kb_index.add_documents(docs, on_progress=_prog)
     except Exception as e:
         store.set_doc_status(doc_id, "failed", error=f"写入向量库失败：{e}"[:500])
         log.error(f"知识库写入失败: doc={doc_id} {e}", exc_info=True)

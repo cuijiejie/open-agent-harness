@@ -167,6 +167,20 @@ def set_doc_status(doc_id: int, status: str, chunks: int | None = None,
         c.commit()
 
 
+def set_doc_progress(doc_id: int, done: int) -> None:
+    """入库进度：把已嵌入的块数写进 kb_doc.chunks，界面「片段」列会实时增长。
+
+    最终 set_doc_status(chunks=n) 会把它校准成总数，所以这里只增不改语义。
+    """
+    try:
+        with pool().connection() as c, c.cursor() as cur:
+            cur.execute("UPDATE kb_doc SET chunks=%s WHERE id=%s", (max(0, int(done)), int(doc_id)))
+            c.commit()
+    except Exception as e:
+        from src.infra.utils.LogUtil import log
+        log.warning(f"写入入库进度失败（忽略）: doc={doc_id}, err={e}")
+
+
 def delete_doc(doc_id: int) -> bool:
     """删登记 + 删向量 + 删落盘原文件"""
     with pool().connection() as c, c.cursor() as cur:

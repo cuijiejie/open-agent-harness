@@ -159,6 +159,12 @@ class Configs(object):
         self.turnMaxSeconds: int = _get('agent', 'turn_max_seconds', '0', int)
         # 单轮工具步数上限：设正数生效，0 = 不限制
         self.turnMaxSteps: int = _get('agent', 'turn_max_steps', '200', int)
+        # 知识库：嵌入并发批数 / 每批条数 / 关键词召回阈值 / 融合相对阈值
+        self.kbEmbedConcurrency: int = _get('kb', 'kb_embed_concurrency', '3', int)
+        self.kbEmbedBatch: int = _get('kb', 'kb_embed_batch', '8', int)
+        self.kbKeywordMinHits: int = _get('kb', 'kb_keyword_min_hits', '2', int)
+        self.kbKeywordMinSim: float = _get('kb', 'kb_keyword_min_sim', '0.15', float)
+        self.kbMinScoreRatio: float = _get('kb', 'kb_min_score_ratio', '0.35', float)
         # 沙箱资源上限（OpenShell create 参数；空=不限制）
         self.sandboxCpu: str = _get('agent', 'sandbox_cpu', '')
         self.sandboxMemory: str = _get('agent', 'sandbox_memory', '')

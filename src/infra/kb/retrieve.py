@@ -58,8 +58,12 @@ def terms(query: str, limit: int = 24) -> list[str]:
     out: list[str] = []
     for w in _WORD.findall(query or ""):
         w = w.lower().strip("._-+#")
-        if len(w) >= 2:
-            out.append(w)
+        if len(w) < 2:
+            continue
+        # 纯数字短语（"99"/"900"）几乎命中一切含数字的表格，噪声远大于收益
+        if w.isdigit() and len(w) < 4:
+            continue
+        out.append(w)
     for run in _CJK.findall(query or ""):
         if len(run) == 1:
             continue
@@ -124,6 +128,8 @@ class KeywordRetriever(BaseRetriever):
             cur.execute(sql, (q, self._owner, like_terms, q))
             rows = cur.fetchall()
 
+        min_hits: int = int(_cfg("kbKeywordMinHits", 2))
+        min_sim: float = float(_cfg("kbKeywordMinSim", 0.15))
         scored: list[tuple[float, tuple]] = []
         for r in rows:
             text = r[1] or ""
@@ -131,7 +137,11 @@ class KeywordRetriever(BaseRetriever):
             hits = sum(1 for t in ts if t in low)
             if hits == 0:
                 continue
-            scored.append((hits + float(r[3] or 0), r))
+            sim = float(r[3] or 0)
+            # 只命中一个 bigram 且 trigram 相似度极低 = 噪声（"QA"/"99" 这类通用片段）
+            if hits < min_hits and sim < min_sim:
+                continue
+            scored.append((hits + sim, r))
         scored.sort(key=lambda x: x[0], reverse=True)
 
         out: list[NodeWithScore] = []
@@ -208,6 +218,14 @@ def search(query: str, owner: str, top_k: int = 5, use_rerank: bool = True) -> l
             "content": n.node.get_content(),
             "score": round(float(n.score or 0.0), 4),
         })
+    # 相对阈值：融合分远低于首条的基本是凑数的（RRF 里单路末位也会进榜）
+    if len(items) > 1:
+        ratio: float = float(_cfg("kbMinScoreRatio", 0.35))
+        top: float = float(items[0].get("score") or 0)
+        if top > 0 and ratio > 0:
+            kept: list[dict] = [x for x in items if float(x.get("score") or 0) >= top * ratio]
+            if kept:
+                items = kept
     log.info(f"知识库检索: q=<{q[:40]}> 召回={len(nodes)} 返回={len(items)}")
     return items
 
