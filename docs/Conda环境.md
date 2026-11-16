@@ -1,8 +1,8 @@
 # 用 Miniforge 管理 Python 环境
 
 > 本部署的 Python 环境用 **Miniforge**（conda-forge 社区发行版），不用 `venv`。
-> 位置：`/home/cuijie/miniforge3`（base）+ `/home/cuijie/miniforge3/envs/oah`（项目环境，Python 3.12.16）。
-> 服务直接调用 `/home/cuijie/miniforge3/envs/oah/bin/python -m uvicorn ...`，
+> 位置：`$HOME/miniforge3`（base）+ `$HOME/miniforge3/envs/oah`（项目环境，Python 3.12.16）。
+> 服务直接调用 `$HOME/miniforge3/envs/oah/bin/python -m uvicorn ...`，
 > **不经过 `conda activate`**。
 >
 > 适用：Ubuntu 22.04 / 24.04，aarch64 或 x86_64。
@@ -80,10 +80,10 @@ cd /opt/open-agent-harness
 ## 4. 用 `install.sh` 切换（推荐，别手改单元文件）
 
 ```bash
-cd /home/cuijie/open-agent-harness        # 源码目录
+cd $HOME/open-agent-harness        # 源码目录
 sudo APP_DIR=/opt/open-agent-harness PORT=5001 WORKERS=3 \
      USE_CONDA=1 SKIP_FRONTEND=1 \
-     CONDA_PREFIX_DIR=/home/cuijie/miniforge3 CONDA_ENV=oah \
+     CONDA_PREFIX_DIR=$HOME/miniforge3 CONDA_ENV=oah \
      bash deploy/install.sh
 ```
 
@@ -114,14 +114,14 @@ cd /opt/open-agent-harness
 
 # 1) 确认服务真的在用 conda 的 python
 systemctl show open-agent-harness -p ExecStart | tr ' ' '\n' | grep -m1 python
-#   期望 /home/cuijie/miniforge3/envs/oah/bin/python
+#   期望 $HOME/miniforge3/envs/oah/bin/python
 
 # 2) 健康检查
 curl -s http://127.0.0.1:5001/open-agent-harness/api/health
 #   期望 {"ok":true,"db":"ok","redis":"ok"}
 
 # 3) 项目验收脚本（含 104 个单测）——必须显式指定解释器
-PY=/home/cuijie/miniforge3/envs/oah/bin/python bash deploy/verify.sh
+PY=$HOME/miniforge3/envs/oah/bin/python bash deploy/verify.sh
 #   期望 ✅ 验收通过
 
 # 4) 端到端：登录后发一条对话，确认模型 + 沙箱工具链正常
@@ -138,14 +138,14 @@ PY=/home/cuijie/miniforge3/envs/oah/bin/python bash deploy/verify.sh
 
 | 项 | 值 |
 |---|---|
-| conda | `/home/cuijie/miniforge3/bin/conda`，26.9.4 |
-| 项目环境 | `/home/cuijie/miniforge3/envs/oah`，Python 3.12.16 |
-| 服务解释器 | `/home/cuijie/miniforge3/envs/oah/bin/python`（`--workers 3`） |
-| `.env` 标记 | `PA_INSTALL_USE_CONDA=1` / `PA_INSTALL_CONDA_PREFIX=/home/cuijie/miniforge3` / `PA_INSTALL_CONDA_ENV=oah` |
+| conda | `$HOME/miniforge3/bin/conda`，26.9.4 |
+| 项目环境 | `$HOME/miniforge3/envs/oah`，Python 3.12.16 |
+| 服务解释器 | `$HOME/miniforge3/envs/oah/bin/python`（`--workers 3`） |
+| `.env` 标记 | `PA_INSTALL_USE_CONDA=1` / `PA_INSTALL_CONDA_PREFIX=$HOME/miniforge3` / `PA_INSTALL_CONDA_ENV=oah` |
 | 旧 venv | `/opt/open-agent-harness/.venv` 已删除（478 MB） |
 | 旧 Miniconda | `/opt/miniconda3` 已删除（2.0 GB） |
 
-> 服务以 root 运行，读的是 cuijie 家目录下的 conda 环境。Ubuntu 的 `/home/cuijie`
+> 服务以 root 运行，读的是 部署用户的家目录下的 conda 环境。Ubuntu 的 `$HOME`
 > 是 `750`，root 不受影响；但如果以后改了家目录权限或换用非 root 运行服务，
 > 需要重新评估——必要时把 Miniforge 装到 `/opt/miniforge3` 更稳。
 
@@ -170,7 +170,7 @@ bash Miniconda3-latest-Linux-aarch64.sh -b -p "$HOME/miniconda3"
 ## 8. 回滚到 venv
 
 ```bash
-cd /home/cuijie/open-agent-harness
+cd $HOME/open-agent-harness
 sudo APP_DIR=/opt/open-agent-harness USE_CONDA=0 SKIP_FRONTEND=1 bash deploy/install.sh
 sudo sed -i '/^PA_INSTALL_USE_CONDA=/d;/^PA_INSTALL_CONDA_PREFIX=/d;/^PA_INSTALL_CONDA_ENV=/d' \
      /opt/open-agent-harness/.env

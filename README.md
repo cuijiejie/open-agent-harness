@@ -1,8 +1,31 @@
 # Open Agent Harness
 
-> 一个能把活干完的智能体平台：对话为入口，工具为手脚，沙箱为工作台，权限为围栏。
+**一个能把活干完的智能体平台**：对话是入口，工具是手脚，沙箱是工作台，权限是围栏。
 
-不是"又一个 ChatGPT 套壳"。它解决的是四件事：
+![对话：流式输出 + Markdown 表格渲染](docs/assets/screenshot-chat.jpg)
+
+不是又一个"ChatGPT 套壳"。它要解决的是四件事：模型**会说不会做**、敢给**手**却不敢放权、
+经验**沉淀不下来**、出了事**没法复盘**。
+
+## 适合谁
+
+| 你的情况 | 结论 |
+|---|---|
+| 想把内部流程（查数据、读表格、出报表、答制度）交给一个会自己动手的 Agent | ✅ 合适 |
+| 需要按角色管控"谁能用哪个工具"，并且要求事后能复盘 | ✅ 合适 |
+| 只想拖拽连线画工作流、不写代码 | ❌ Dify / Coze 这类平台更省事 |
+| 需要开箱即用的 SaaS、多租户隔离 | ❌ 本项目是**单机自托管**，一套实例给一个团队用 |
+
+## 和拖拽式平台的区别
+
+| | Open Agent Harness | 常见工作流平台 |
+|---|---|---|
+| 谁决定下一步 | **模型自己**（ReAct + 工具），可以中途改道 | 人预先连线，路径固定 |
+| 执行环境 | 每个用户一个隔离沙箱，能真跑 Python、读写文件 | 多以 API 调用为主 |
+| 权限边界 | 工具**按角色装配**，没权限的工具不进模型上下文 | 多以应用 / API Key 为界 |
+| 复盘 | 工具轨迹 + 管理审计分开记，可逐条回看 | 以运行日志为主 |
+
+## 它具体做了什么
 
 | 问题 | 平台的做法 |
 |---|---|
@@ -23,8 +46,6 @@
 - **可观测**：轨迹（模型做了什么）+ 审计（人做了什么），两类记录分开存
 
 ## 界面
-
-![对话：流式输出 + Markdown 表格渲染](docs/assets/screenshot-chat.jpg)
 
 | 知识库：上传即索引，检索带出处 | 轨迹：每次工具调用都可回看 |
 |---|---|
@@ -69,9 +90,9 @@ sudo PA_DB_MYSQL_PASS='你的密码' PA_AGENT_PG_PASS='你的PG密码' \
      USE_CONDA=1 CONDA_PREFIX_DIR="$HOME/miniforge3" CONDA_ENV=oah \
      bash deploy/install.sh
 
-# 3. 建管理员（密码默认 admin，可 --password 指定）
+# 3. 建管理员（密码默认 admin，可用 --password 指定一个强密码）
 cd /opt/open-agent-harness && PYTHONPATH=. "$HOME/miniforge3/envs/oah/bin/python" \
-     deploy/seed_admin.py --password '你的登录密码'
+     deploy/seed_admin.py --password '换成你的强密码'
 ```
 
 装完打开 `http://<服务器IP>:5001/open-agent-harness/`。
@@ -81,7 +102,7 @@ cd /opt/open-agent-harness && PYTHONPATH=. "$HOME/miniforge3/envs/oah/bin/python
 ### 本地试跑
 
 ```bash
-# Python 环境用 Miniforge（部署机为 /home/cuijie/miniforge3/envs/oah），见 docs/Conda环境.md
+# Python 环境用 Miniforge（例如 $HOME/miniforge3/envs/oah），见 docs/Conda环境.md
 conda create -y -n oah --override-channels -c conda-forge python=3.12
 conda activate oah
 pip install -r requirements.txt
@@ -91,7 +112,7 @@ cd frontend && npm ci && npm run build && cd ..
 uvicorn src.app_fastapi:app --host 0.0.0.0 --port 5001 --workers 4   # http://localhost:5001/open-agent-harness/
 ```
 
-首次登录先建管理员：`PYTHONPATH=. "$HOME/miniforge3/envs/oah/bin/python" deploy/seed_admin.py --password '你的密码'`（旧版的免密直登 `/test-login` 已删除）。
+首次登录先建管理员：`PYTHONPATH=. "$HOME/miniforge3/envs/oah/bin/python" deploy/seed_admin.py --password '换成你的强密码'`（旧版的免密直登 `/test-login` 已删除）。
 
 **部署**（环境、依赖、建库、嵌入服务、MCP 接入、验收、排障全在里面）见
 [`docs/部署说明.md`](docs/部署说明.md)；
@@ -128,6 +149,14 @@ src/plugins/tools/hello/
 ```
 
 重启后在「工具管理」里就能看到；再把它分配给某个角色，模型才会拿到它。
+
+## 项目状态
+
+- 单机自托管，一套实例服务一个团队；目前**没有**多租户、SSO、分布式部署
+- 已在真实环境跑通：对话 / 工具 / 沙箱 / 权限 / 知识库（含 OCR）/ MCP / 审计轨迹
+- 质量门：143 个后端单测 + 前端纯函数测试 + 静态检查（`bash test/run_all.sh`）
+- 检索有一组 7 条冒烟评测（`test/eval/run_eval.py`），改参数前后各跑一次
+- 已知瓶颈：嵌入在 CPU 上跑（bge-m3 int8），大文档入库按分钟计；要快就上 GPU 或调 `kb_ingest_workers`
 
 ## 技术栈
 
